@@ -2,8 +2,9 @@
 
 function Aabb()
 {
-  this.min_ = [0, 0, 0]; //min vertex
-  this.max_ = [0, 0, 0]; //max vertex
+  this.min_ = [Infinity, Infinity, Infinity]; //min vertex
+  this.max_ = [-Infinity, -Infinity, -Infinity]; //max vertex
+  this.center_ = [0.0, 0.0, 0.0]; //center (computed only for triangle's aabb)
 }
 
 Aabb.prototype = {
@@ -11,8 +12,9 @@ Aabb.prototype = {
   clone: function ()
   {
     var ab = new Aabb();
-    ab.min_ = this.min_.slice();
-    ab.max_ = this.max_.slice();
+    vec3.copy(ab.min_, this.min_);
+    vec3.copy(ab.max_, this.max_);
+    vec3.copy(ab.center_, this.center_);
     return ab;
   },
 
@@ -49,7 +51,7 @@ Aabb.prototype = {
   /** Compute center */
   computeCenter: function ()
   {
-    var temp = [0, 0, 0];
+    var temp = [0.0, 0.0, 0.0];
     return vec3.scale(temp, vec3.add(temp, this.min_, this.max_), 0.5);
   },
 
@@ -168,21 +170,23 @@ Aabb.prototype = {
     var vx = vert[0],
       vy = vert[1],
       vz = vert[2];
+    var dx = 0.0,
+      dy = 0.0,
+      dz = 0.0;
 
-    var nearest = [0, 0, 0];
-    if (min[0] > vx) nearest[0] = min[0];
-    else if (max[0] < vx) nearest[0] = max[0];
-    else nearest[0] = vx;
+    if (min[0] > vx) dx = min[0] - vx;
+    else if (max[0] < vx) dx = max[0] - vx;
+    else dx = 0.0;
 
-    if (min[1] > vy) nearest[1] = min[1];
-    else if (max[1] < vy) nearest[1] = max[1];
-    else nearest[1] = vy;
+    if (min[1] > vy) dy = min[1] - vy;
+    else if (max[1] < vy) dy = max[1] - vy;
+    else dy = 0.0;
 
-    if (min[2] > vz) nearest[2] = min[2];
-    else if (max[2] < vz) nearest[2] = max[2];
-    else nearest[2] = vz;
+    if (min[2] > vz) dz = min[2] - vz;
+    else if (max[2] < vz) dz = max[2] - vz;
+    else dz = 0.0;
 
-    return vec3.sqrDist(vert, nearest) < radiusSquared;
+    return (dx * dx + dy * dy + dz * dz) < radiusSquared;
   },
 
   /** Check if the aabb is a plane, if so... enlarge it */
@@ -206,5 +210,20 @@ Aabb.prototype = {
       min[2] -= offset;
       max[2] += offset;
     }
+  },
+
+  /**
+   * Because of laziness I approximate the box by a sphere
+   * Return 0 if the sphere is below the plane
+   * Return 1 if the sphere is above the plane
+   * Return 2 if the sphere intersects the plane
+   */
+  intersectPlane: function (origin, normal)
+  {
+    var center = this.computeCenter();
+    var distToPlane = vec3.dot(vec3.sub(center, center, origin), normal);
+    if (distToPlane * distToPlane < vec3.sqrDist(this.min_, this.max_) * 0.25)
+      return 2;
+    return distToPlane > 0.0 ? 1 : 0;
   }
 };

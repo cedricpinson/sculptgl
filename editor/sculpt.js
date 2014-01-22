@@ -7,23 +7,37 @@ function Sculpt(states)
   this.intensity_ = 0.75; //deformation intensity
   this.tool_ = Sculpt.tool.BRUSH; //sculpting mode
   this.topo_ = Sculpt.topo.SUBDIVISION; //topological mode
-  this.detail_ = 0.75; //intensity of details
+  this.detailSubdivision_ = 0.75; //maximal edge length before we subdivide it
+  this.detailDecimation_ = 0.1; //minimal edge length before we collapse it (dependent of detailSubdivision_)
   this.negative_ = false; //opposition deformation
+  this.clay_ = true; //clay sculpting (modifier for brush tool)
   this.culling_ = false; //if we backface cull the vertices
+  this.color_ = [168, 66, 66]; //color painting
 
-  this.d2Min_ = 0; //uniform refinement of mesh (min edge length)
-  this.d2Max_ = 0; //uniform refinement of mesh (max edge length)
+  this.d2Min_ = 0.0; //uniform refinement of mesh (min edge length)
+  this.d2Max_ = 0.0; //uniform refinement of mesh (max edge length)
   this.d2Thickness_ = 0.5; //distance between 2 vertices before split/merge
-  this.d2Move_ = 0; //max displacement of vertices per step
+  this.d2Move_ = 0.0; //max displacement of vertices per step
 
+  //rotate stuffs
   this.rotateData_ = {
-    normal: [0, 0, 0], //normal of rotation plane
-    center2d: [0, 0] //2D center of rotation 
+    normal: [0.0, 0.0, 0.0], //normal of rotation plane
+    center: [0.0, 0.0] //2D center of rotation 
   };
   this.rotateDataSym_ = {
-    normal: [0, 0, 0], //normal of rotation plane
-    center2d: [0, 0] //2D center of rotation 
+    normal: [0.0, 0.0, 0.0], //normal of rotation plane
+    center: [0.0, 0.0] //2D center of rotation 
   };
+
+  //drag stuffs
+  this.dragDir_ = [0.0, 0.0, 0.0]; //direction of deformation
+  this.dragDirSym_ = [0.0, 0.0, 0.0]; //direction of deformation
+
+  //cut stuffs
+  this.lineOrigin_ = [0.0, 0.0]; //the 2d line origin
+  this.lineNormal_ = [0.0, 0.0]; //the 2d line normal
+  this.fillHoles_ = true; //fill holes
+  this.subdDetailCut_ = 2; //subdivision detail modifier
 }
 
 //the sculpting tools
@@ -34,30 +48,145 @@ Sculpt.tool = {
   SMOOTH: 3,
   FLATTEN: 4,
   PINCH: 5,
-  CREASE: 6
+  CREASE: 6,
+  DRAG: 7,
+  COLOR: 8,
+  SCALE: 9,
+  CUT: 10
 };
 
 //the topological tools
 Sculpt.topo = {
   STATIC: 0,
   SUBDIVISION: 1,
-  DECIMATION: 2,
-  UNIFORMISATION: 3,
-  ADAPTIVE: 4
+  ADAPTIVE: 2
 };
 
 Sculpt.prototype = {
   /** Set adaptive parameters */
   setAdaptiveParameters: function (radiusSquared)
   {
-    this.d2Max_ = radiusSquared * (1.1 - this.detail_) * 0.2;
+    this.d2Max_ = radiusSquared * (1.1 - this.detailSubdivision_) * 0.2;
     this.d2Min_ = this.d2Max_ / 4.2025;
     this.d2Move_ = this.d2Min_ * 0.2375;
     this.d2Thickness_ = (4.0 * this.d2Move_ + this.d2Max_ / 3.0) * 1.1;
   },
 
+  /** Make a brush stroke */
+  sculptStroke: function (mouseX, mouseY, pressureRadius, pressureIntensity, sculptgl)
+  {
+    if (this.tool_ === Sculpt.tool.ROTATE)
+      return this.sculptStrokeRotate(mouseX, mouseY, pressureIntensity, sculptgl);
+    else if (this.tool_ === Sculpt.tool.SCALE)
+      return this.sculptStrokeScale(mouseX, mouseY, pressureIntensity, sculptgl);
+    var ptPlane = sculptgl.ptPlane_,
+      nPlane = sculptgl.nPlane_;
+    var picking = sculptgl.picking_,
+      pickingSym = sculptgl.pickingSym_;
+    var lx = sculptgl.lastMouseX_,
+      ly = sculptgl.lastMouseY_;
+    var dx = mouseX - lx,
+      dy = mouseY - ly;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    sculptgl.sumDisplacement_ += dist;
+    var sumDisp = sculptgl.sumDisplacement_;
+    var minSpacing = 0.2 * picking.rDisplay_;
+    var step = dist / Math.floor(dist / minSpacing);
+    dx /= dist;
+    dy /= dist;
+    if (!sculptgl.continuous_)
+    {
+      mouseX = lx;
+      mouseY = ly;
+    }
+    else
+    {
+      sumDisp = 0;
+      dist = 0;
+    }
+    var mesh = sculptgl.mesh_;
+    var sym = sculptgl.symmetry_;
+    var drag = this.tool_ === Sculpt.tool.DRAG;
+    if (drag)
+    {
+      minSpacing = 0.0;
+      picking.mesh_ = pickingSym.mesh_ = mesh;
+      var inter = picking.interPoint_;
+      var interSym = pickingSym.interPoint_;
+      interSym[0] = inter[0];
+      interSym[1] = inter[1];
+      interSym[2] = inter[2];
+      Geometry.mirrorPoint(interSym, ptPlane, nPlane);
+    }
+    if (sumDisp > minSpacing * 100 && !drag)
+      sumDisp = 0;
+    else if (sumDisp > minSpacing || sumDisp === 0)
+    {
+      sumDisp = 0;
+      for (var i = 0; i <= dist; i += step)
+      {
+        if (drag)
+          this.updateDragDir(mesh, picking, mouseX, mouseY, pressureRadius);
+        else
+          picking.intersectionMouseMesh(mesh, mouseX, mouseY, pressureRadius);
+        if (!picking.mesh_)
+          break;
+        picking.pickVerticesInSphere(picking.rWorldSqr_);
+        this.sculptMesh(picking, pressureIntensity);
+        if (sym)
+        {
+          if (drag)
+            this.updateDragDir(mesh, pickingSym, mouseX, mouseY, pressureRadius, ptPlane, nPlane);
+          else
+            pickingSym.intersectionMouseMesh(mesh, mouseX, mouseY, pressureRadius, ptPlane, nPlane);
+          if (!pickingSym.mesh_)
+            break;
+          pickingSym.rWorldSqr_ = picking.rWorldSqr_;
+          pickingSym.pickVerticesInSphere(pickingSym.rWorldSqr_);
+          this.sculptMesh(pickingSym, pressureIntensity, true);
+        }
+        mouseX += dx * step;
+        mouseY += dy * step;
+      }
+      this.mesh_.updateBuffers();
+    }
+    sculptgl.sumDisplacement_ = sumDisp;
+  },
+
+  /** Make a brush scale stroke */
+  sculptStrokeScale: function (mouseX, mouseY, pressureIntensity, sculptgl)
+  {
+    if (sculptgl.picking_.mesh_)
+    {
+      sculptgl.picking_.pickVerticesInSphere(sculptgl.picking_.rWorldSqr_);
+      this.sculptMesh(sculptgl.picking_, pressureIntensity, false, mouseX, mouseY, sculptgl.lastMouseX_, sculptgl.lastMouseY_);
+      if (sculptgl.symmetry_)
+      {
+        sculptgl.pickingSym_.pickVerticesInSphere(sculptgl.pickingSym_.rWorldSqr_);
+        this.sculptMesh(sculptgl.pickingSym_, pressureIntensity, true, mouseX, mouseY, sculptgl.lastMouseX_, sculptgl.lastMouseY_);
+      }
+      this.mesh_.updateBuffers();
+    }
+  },
+
+  /** Make a brush rotate stroke */
+  sculptStrokeRotate: function (mouseX, mouseY, pressureIntensity, sculptgl)
+  {
+    if (sculptgl.picking_.mesh_)
+    {
+      sculptgl.picking_.pickVerticesInSphere(sculptgl.picking_.rWorldSqr_);
+      this.sculptMesh(sculptgl.picking_, pressureIntensity, false, mouseX, mouseY, sculptgl.lastMouseX_, sculptgl.lastMouseY_);
+      if (sculptgl.symmetry_)
+      {
+        sculptgl.pickingSym_.pickVerticesInSphere(sculptgl.pickingSym_.rWorldSqr_);
+        this.sculptMesh(sculptgl.pickingSym_, pressureIntensity, true, sculptgl.lastMouseX_, sculptgl.lastMouseY_, mouseX, mouseY);
+      }
+      this.mesh_.updateBuffers();
+    }
+  },
+
   /** Sculpt the mesh */
-  sculptMesh: function (picking, pressureIntensity, mouseX, mouseY, lastMouseX, lastMouseY, sym)
+  sculptMesh: function (picking, pressureIntensity, sym, mouseX, mouseY, lastMouseX, lastMouseY)
   {
     var mesh = this.mesh_;
     var iVertsSelected = picking.pickedVertices_;
@@ -79,12 +208,11 @@ Sculpt.prototype = {
     switch (this.topo_)
     {
     case Sculpt.topo.SUBDIVISION:
-      iTris = topo.subdivision(iTris, this.d2Max_);
+      if (this.detailSubdivision_ > 0.0)
+        iTris = topo.subdivision(iTris, this.d2Max_);
+      if (this.detailDecimation_ > 0.0)
+        iTris = topo.decimation(iTris, this.d2Min_ * this.detailDecimation_);
       break;
-    case Sculpt.topo.DECIMATION:
-      iTris = topo.decimation(iTris, this.d2Min_);
-      break;
-    case Sculpt.topo.UNIFORMISATION:
     case Sculpt.topo.ADAPTIVE:
       iTris = topo.subdivision(iTris, this.d2Max_);
       iTris = topo.decimation(iTris, this.d2Min_);
@@ -107,7 +235,7 @@ Sculpt.prototype = {
       {
         iVertsInRadius.push(id);
         var j = id * 3;
-        if ((nAr[j] * eyeX + nAr[j + 1] * eyeY + nAr[j + 2] * eyeZ) <= 0)
+        if ((nAr[j] * eyeX + nAr[j + 1] * eyeY + nAr[j + 2] * eyeZ) <= 0.0)
           iVertsFront.push(id);
       }
     }
@@ -121,7 +249,6 @@ Sculpt.prototype = {
       switch (this.tool_)
       {
       case Sculpt.tool.BRUSH:
-        this.flatten(center, iVertsInRadius, iVertsFront, radiusSquared, intensity * 0.5);
         this.brush(center, iVertsInRadius, iVertsFront, radiusSquared, intensity);
         break;
       case Sculpt.tool.INFLATE:
@@ -142,6 +269,15 @@ Sculpt.prototype = {
       case Sculpt.tool.CREASE:
         this.crease(center, iVertsInRadius, iVertsFront, radiusSquared, intensity);
         break;
+      case Sculpt.tool.DRAG:
+        this.drag(center, iVertsInRadius, radiusSquared, sym);
+        break;
+      case Sculpt.tool.COLOR:
+        this.paint(center, iVertsInRadius, radiusSquared);
+        break;
+      case Sculpt.tool.SCALE:
+        this.scale(center, iVertsInRadius, radiusSquared, mouseX - lastMouseX);
+        break;
       }
     }
 
@@ -159,32 +295,44 @@ Sculpt.prototype = {
     var aNormal = this.areaNormal(iVertsFront);
     if (!aNormal)
       return;
+    var aCenter = this.areaCenter(iVertsFront);
     var vAr = this.mesh_.vertexArray_;
     var radius = Math.sqrt(radiusSquared);
     var nbVerts = iVertsInRadius.length;
-    var deformIntensity = intensity * radius * 0.1;
-    if (this.topo_ === Sculpt.topo.ADAPTIVE)
-      deformIntensity = Math.min(Math.sqrt(this.d2Move_), deformIntensity);
+    var deformIntensityBrush = intensity * radius * 0.1;
+    var deformIntensityFlatten = this.clay_ ? intensity : intensity * 0.3;
     if (this.negative_)
-      deformIntensity = -deformIntensity;
+      deformIntensityBrush = -deformIntensityBrush;
     var cx = center[0],
       cy = center[1],
       cz = center[2];
+    var ax = aCenter[0],
+      ay = aCenter[1],
+      az = aCenter[2];
     var anx = aNormal[0],
       any = aNormal[1],
       anz = aNormal[2];
+    var limitMove = this.topo_ === Sculpt.topo.ADAPTIVE;
+    var dMove = Math.sqrt(this.d2Move_);
     for (var i = 0; i < nbVerts; ++i)
     {
       var ind = iVertsInRadius[i] * 3;
-      var dx = vAr[ind] - cx,
-        dy = vAr[ind + 1] - cy,
-        dz = vAr[ind + 2] - cz;
+      var vx = vAr[ind],
+        vy = vAr[ind + 1],
+        vz = vAr[ind + 2];
+      var distToPlane = (vx - ax) * anx + (vy - ay) * any + (vz - az) * anz;
+      var dx = vx - cx,
+        dy = vy - cy,
+        dz = vz - cz;
       var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * dist * dist * dist * dist - 4 * dist * dist * dist + 1;
-      fallOff = deformIntensity * fallOff;
-      vAr[ind] += anx * fallOff;
-      vAr[ind + 1] += any * fallOff;
-      vAr[ind + 2] += anz * fallOff;
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
+      fallOff = fallOff * (distToPlane * deformIntensityFlatten - deformIntensityBrush);
+      if (limitMove && fallOff > dMove)
+        fallOff = dMove;
+      vAr[ind] -= anx * fallOff;
+      vAr[ind + 1] -= any * fallOff;
+      vAr[ind + 2] -= anz * fallOff;
     }
   },
 
@@ -211,7 +359,8 @@ Sculpt.prototype = {
         dy = vAr[ind + 1] - cy,
         dz = vAr[ind + 2] - cz;
       var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * dist * dist * dist * dist - 4 * dist * dist * dist + 1;
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
       fallOff = deformIntensity * fallOff;
       vAr[ind] += nAr[ind] * fallOff;
       vAr[ind + 1] += nAr[ind + 1] * fallOff;
@@ -219,18 +368,70 @@ Sculpt.prototype = {
     }
   },
 
-  /** Start a rotate sculpt session */
-  startRotate: function (picking, mouseX, mouseY, pickingSym, ptPlane, nPlane)
+  /** Start a sculpt sculpt stroke */
+  startScale: function (picking, mouseX, mouseY, pickingSym, ptPlane, nPlane, sym)
   {
-    var rotateData = this.rotateData_;
-    var vNear = Geometry.point2Dto3D(picking.camera_, mouseX, mouseY, 0),
-      vFar = Geometry.point2Dto3D(picking.camera_, mouseX, mouseY, 1);
+    var vNear = picking.camera_.unproject(mouseX, mouseY, 0.0),
+      vFar = picking.camera_.unproject(mouseX, mouseY, 1.0);
+    var matInverse = mat4.create();
+    mat4.invert(matInverse, this.mesh_.matTransform_);
+    vec3.transformMat4(vNear, vNear, matInverse);
+    vec3.transformMat4(vFar, vFar, matInverse);
+    picking.intersectionRayMesh(this.mesh_, vNear, vFar, mouseX, mouseY, 1.0);
+    if (!picking.mesh_)
+      return;
+    picking.pickVerticesInSphere(picking.rWorldSqr_);
+    if (sym)
+    {
+      var vNearSym = [vNear[0], vNear[1], vNear[2]];
+      Geometry.mirrorPoint(vNearSym, ptPlane, nPlane);
+      var vFarSym = [vFar[0], vFar[1], vFar[2]];
+      Geometry.mirrorPoint(vFarSym, ptPlane, nPlane);
+      pickingSym.intersectionRayMesh(this.mesh_, vNearSym, vFarSym, mouseX, mouseY, 1.0);
+      if (!pickingSym.mesh_)
+        return;
+      pickingSym.rWorldSqr_ = picking.rWorldSqr_;
+      pickingSym.pickVerticesInSphere(pickingSym.rWorldSqr_);
+    }
+  },
+
+  /** Scale the vertices around the mouse point intersection */
+  scale: function (center, iVerts, radiusSquared, intensity)
+  {
+    var vAr = this.mesh_.vertexArray_;
+    var deltaScale = intensity * 0.01;
+    var radius = Math.sqrt(radiusSquared);
+    var nbVerts = iVerts.length;
+    var cx = center[0],
+      cy = center[1],
+      cz = center[2];
+    for (var i = 0; i < nbVerts; ++i)
+    {
+      var ind = iVerts[i] * 3;
+      var dx = vAr[ind] - cx,
+        dy = vAr[ind + 1] - cy,
+        dz = vAr[ind + 2] - cz;
+      var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
+      fallOff *= deltaScale;
+      vAr[ind] += dx * fallOff;
+      vAr[ind + 1] += dy * fallOff;
+      vAr[ind + 2] += dz * fallOff;
+    }
+  },
+
+  /** Start a rotate sculpt stroke */
+  startRotate: function (picking, mouseX, mouseY, pickingSym, ptPlane, nPlane, sym)
+  {
+    var vNear = picking.camera_.unproject(mouseX, mouseY, 0.0),
+      vFar = picking.camera_.unproject(mouseX, mouseY, 1.0);
     var matInverse = mat4.create();
     mat4.invert(matInverse, this.mesh_.matTransform_);
     vec3.transformMat4(vNear, vNear, matInverse);
     vec3.transformMat4(vFar, vFar, matInverse);
     this.initRotateData(picking, vNear, vFar, mouseX, mouseY, this.rotateData_);
-    if (pickingSym)
+    if (sym)
     {
       var vNearSym = [vNear[0], vNear[1], vNear[2]];
       Geometry.mirrorPoint(vNearSym, ptPlane, nPlane);
@@ -244,14 +445,14 @@ Sculpt.prototype = {
   /** Set a few infos that will be needed for the rotate function afterwards */
   initRotateData: function (picking, vNear, vFar, mouseX, mouseY, rotateData)
   {
-    picking.intersectionRayMesh(this.mesh_, vNear, vFar, mouseX, mouseY, 1);
+    picking.intersectionRayMesh(this.mesh_, vNear, vFar, mouseX, mouseY, 1.0);
     if (!picking.mesh_)
       return;
     picking.pickVerticesInSphere(picking.rWorldSqr_);
-    var ray = [0, 0, 0];
+    var ray = [0.0, 0.0, 0.0];
     vec3.sub(ray, vNear, vFar);
     rotateData.normal = vec3.normalize(ray, ray);
-    rotateData.center2d = [mouseX, mouseY];
+    rotateData.center = [mouseX, mouseY];
   },
 
   /** Rotate the vertices around the mouse point intersection */
@@ -260,13 +461,13 @@ Sculpt.prototype = {
     var rotateData = this.rotateData_;
     if (sym)
       rotateData = this.rotateDataSym_;
-    var mouseCenter = rotateData.center2d;
+    var mouseCenter = rotateData.center;
     var vecMouse = [mouseX - mouseCenter[0], mouseY - mouseCenter[1]];
-    if (vec2.len(vecMouse) < 30)
+    if (vec2.len(vecMouse) < 30.0)
       return;
     vec2.normalize(vecMouse, vecMouse);
     var nPlane = rotateData.normal;
-    var rot = [0, 0, 0, 0];
+    var rot = [0.0, 0.0, 0.0, 0.0];
     var vecOldMouse = [lastMouseX - mouseCenter[0], lastMouseY - mouseCenter[1]];
     vec2.normalize(vecOldMouse, vecOldMouse);
     var angle = Geometry.signedAngle2d(vecMouse, vecOldMouse);
@@ -276,6 +477,7 @@ Sculpt.prototype = {
     var cx = center[0],
       cy = center[1],
       cz = center[2];
+    var coord = [0.0, 0.0, 0.0];
     for (var i = 0; i < nbVerts; ++i)
     {
       var ind = iVerts[i] * 3;
@@ -283,12 +485,16 @@ Sculpt.prototype = {
         dy = vAr[ind + 1] - cy,
         dz = vAr[ind + 2] - cz;
       var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * dist * dist * dist * dist - 4 * dist * dist * dist + 1;
-      var coord = [vAr[ind], vAr[ind + 1], vAr[ind + 2]];
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
       quat.setAxisAngle(rot, nPlane, angle * fallOff);
-      vec3.sub(coord, coord, center);
+      coord[0] = vAr[ind] - cx;
+      coord[1] = vAr[ind + 1] - cy;
+      coord[2] = vAr[ind + 2] - cz;
       vec3.transformQuat(coord, coord, rot);
-      vec3.add(coord, coord, center);
+      coord[0] += cx;
+      coord[1] += cy;
+      coord[2] += cz;
       vAr[ind] = coord[0];
       vAr[ind + 1] = coord[1];
       vAr[ind + 2] = coord[2];
@@ -363,11 +569,11 @@ Sculpt.prototype = {
         dy = vy - cy,
         dz = vz - cz;
       var distToCen = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * distToCen * distToCen * distToCen * distToCen - 4 * distToCen * distToCen * distToCen + 1;
-      if (limitMove)
-        fallOff = Math.min(dMove, distToPlane * deformIntensity * fallOff);
-      else
-        fallOff = distToPlane * deformIntensity * fallOff;
+      var fallOff = distToCen * distToCen;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * distToCen + 1.0;
+      fallOff = distToPlane * deformIntensity * fallOff;
+      if (limitMove && fallOff > dMove)
+        fallOff = dMove;
       vAr[ind] -= anx * fallOff;
       vAr[ind + 1] -= any * fallOff;
       vAr[ind + 2] -= anz * fallOff;
@@ -383,7 +589,8 @@ Sculpt.prototype = {
     var cx = center[0],
       cy = center[1],
       cz = center[2];
-    var dMove = Math.sqrt(this.d2Move_);
+    var d2Move = this.d2Move_;
+    var dMove = Math.sqrt(d2Move);
     var limitMove = this.topo_ === Sculpt.topo.ADAPTIVE;
     var deformIntensity = intensity * radius * 0.005;
     for (var i = 0; i < nbVerts; ++i)
@@ -392,18 +599,30 @@ Sculpt.prototype = {
       var vx = vAr[ind],
         vy = vAr[ind + 1],
         vz = vAr[ind + 2];
-      var dx = vx - cx,
-        dy = vy - cy,
-        dz = vz - cz;
+      var dx = cx - vx,
+        dy = cy - vy,
+        dz = cz - vz;
       var distToCen = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * distToCen * distToCen * distToCen * distToCen - 4 * distToCen * distToCen * distToCen + 1;
+      var fallOff = distToCen * distToCen;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * distToCen + 1.0;
+      fallOff = deformIntensity * fallOff;
+      dx *= fallOff;
+      dy *= fallOff;
+      dz *= fallOff;
       if (limitMove)
-        fallOff = Math.min(dMove, deformIntensity * fallOff);
-      else
-        fallOff = deformIntensity * fallOff;
-      vAr[ind] += (cx - vx) * fallOff;
-      vAr[ind + 1] += (cy - vy) * fallOff;
-      vAr[ind + 2] += (cz - vz) * fallOff;
+      {
+        var len = dx * dx + dy * dy + dz * dz;
+        if (len > d2Move)
+        {
+          len = dMove / Math.sqrt(len);
+          dx *= len;
+          dy *= len;
+          dz *= len;
+        }
+      }
+      vAr[ind] += dx;
+      vAr[ind + 1] += dy;
+      vAr[ind + 2] += dz;
     }
   },
 
@@ -422,28 +641,30 @@ Sculpt.prototype = {
     var anx = aNormal[0],
       any = aNormal[1],
       anz = aNormal[2];
-    var dMove = Math.sqrt(this.d2Move_);
+    var d2Move = this.d2Move_;
+    var dMove = Math.sqrt(d2Move);
     var limitMove = this.topo_ === Sculpt.topo.ADAPTIVE;
     var deformIntensity = intensity * radius * 0.005;
-    var brushFactor = 10;
+    var brushFactor = 10.0;
     if (this.negative_)
-      brushFactor = -10;
+      brushFactor = -10.0;
     for (var i = 0; i < nbVerts; ++i)
     {
       var ind = iVertsInRadius[i] * 3;
       var vx = vAr[ind],
         vy = vAr[ind + 1],
         vz = vAr[ind + 2];
-      var dx = vx - cx,
-        dy = vy - cy,
-        dz = vz - cz;
+      var dx = cx - vx,
+        dy = cy - vy,
+        dz = cz - vz;
       var distToCen = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
-      var fallOff = 3 * distToCen * distToCen * distToCen * distToCen - 4 * distToCen * distToCen * distToCen + 1;
-      var brushModifier = deformIntensity * Math.pow(2 - fallOff, -20) * brushFactor;
-      fallOff = deformIntensity * fallOff;
-      dx = (cx - vx) * fallOff + anx * brushModifier;
-      dy = (cy - vy) * fallOff + any * brushModifier;
-      dz = (cz - vz) * fallOff + anz * brushModifier;
+      var fallOff = distToCen * distToCen;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * distToCen + 1.0;
+      var brushModifier = deformIntensity * Math.pow(2 - fallOff, -5) * brushFactor;
+      fallOff *= 0.1;
+      dx = dx * fallOff + anx * brushModifier;
+      dy = dy * fallOff + any * brushModifier;
+      dz = dz * fallOff + anz * brushModifier;
       if (limitMove)
       {
         var len = dx * dx + dy * dy + dz * dz;
@@ -458,6 +679,94 @@ Sculpt.prototype = {
       vAr[ind] += dx;
       vAr[ind + 1] += dy;
       vAr[ind + 2] += dz;
+    }
+  },
+
+  /** Set a few infos that will be needed for the drag function afterwards */
+  updateDragDir: function (mesh, picking, mouseX, mouseY, pressureRadius, ptPlane, nPlane)
+  {
+    var vNear = picking.camera_.unproject(mouseX, mouseY, 0.0),
+      vFar = picking.camera_.unproject(mouseX, mouseY, 1.0);
+    var matInverse = mat4.create();
+    mat4.invert(matInverse, mesh.matTransform_);
+    vec3.transformMat4(vNear, vNear, matInverse);
+    vec3.transformMat4(vFar, vFar, matInverse);
+    var dir = this.dragDir_;
+    if (ptPlane)
+    {
+      dir = this.dragDirSym_;
+      Geometry.mirrorPoint(vNear, ptPlane, nPlane);
+      Geometry.mirrorPoint(vFar, ptPlane, nPlane);
+    }
+    var center = picking.interPoint_;
+    picking.interPoint_ = Geometry.vertexOnLine(center, vNear, vFar);
+    vec3.sub(dir, picking.interPoint_, center);
+    picking.mesh = mesh;
+    picking.computeRadiusWorldSq(mouseX, mouseY, pressureRadius);
+    var eyeDir = picking.eyeDir_;
+    vec3.sub(eyeDir, vFar, vNear);
+    vec3.normalize(eyeDir, eyeDir);
+  },
+
+  /** Drag deformation */
+  drag: function (center, iVerts, radiusSquared, sym)
+  {
+    var mesh = this.mesh_;
+    var vAr = mesh.vertexArray_;
+    var nbVerts = iVerts.length;
+    var radius = Math.sqrt(radiusSquared);
+    var cx = center[0],
+      cy = center[1],
+      cz = center[2];
+    var dir = sym ? this.dragDirSym_ : this.dragDir_;
+    var dirx = dir[0],
+      diry = dir[1],
+      dirz = dir[2];
+    for (var i = 0; i < nbVerts; ++i)
+    {
+      var ind = iVerts[i] * 3;
+      var dx = vAr[ind] - cx,
+        dy = vAr[ind + 1] - cy,
+        dz = vAr[ind + 2] - cz;
+      var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
+      vAr[ind] += dirx * fallOff;
+      vAr[ind + 1] += diry * fallOff;
+      vAr[ind + 2] += dirz * fallOff;
+    }
+  },
+
+  /** Paint color vertices */
+  paint: function (center, iVerts, radiusSquared)
+  {
+    var mesh = this.mesh_;
+    var vAr = mesh.vertexArray_;
+    var cAr = mesh.colorArray_;
+    var color = this.color_;
+    var radius = Math.sqrt(radiusSquared);
+    var cr = color[0] / 255.0,
+      cg = color[1] / 255.0,
+      cb = color[2] / 255.0;
+    var cx = center[0],
+      cy = center[1],
+      cz = center[2];
+    var intensity = this.intensity_;
+    var nbVerts = iVerts.length;
+    for (var i = 0; i < nbVerts; ++i)
+    {
+      var ind = iVerts[i] * 3;
+      var dx = vAr[ind] - cx,
+        dy = vAr[ind + 1] - cy,
+        dz = vAr[ind + 2] - cz;
+      var dist = Math.sqrt(dx * dx + dy * dy + dz * dz) / radius;
+      var fallOff = dist * dist;
+      fallOff = 3.0 * fallOff * fallOff - 4.0 * fallOff * dist + 1.0;
+      fallOff *= intensity;
+      var fallOffCompl = 1.0 - fallOff;
+      cAr[ind] = cAr[ind] * fallOffCompl + cr * fallOff;
+      cAr[ind + 1] = cAr[ind + 1] * fallOffCompl + cg * fallOff;
+      cAr[ind + 2] = cAr[ind + 2] * fallOffCompl + cb * fallOff;
     }
   },
 
@@ -550,9 +859,9 @@ Sculpt.prototype = {
   {
     var nAr = this.mesh_.normalArray_;
     var nbVerts = iVerts.length;
-    var anx = 0,
-      any = 0,
-      anz = 0;
+    var anx = 0.0,
+      any = 0.0,
+      anz = 0.0;
     for (var i = 0; i < nbVerts; ++i)
     {
       var ind = iVerts[i] * 3;
@@ -563,7 +872,7 @@ Sculpt.prototype = {
     var len = Math.sqrt(anx * anx + any * any + anz * anz);
     if (len === 0)
       return null;
-    len = 1 / len;
+    len = 1.0 / len;
     return [anx * len, any * len, anz * len];
   },
 
@@ -572,9 +881,9 @@ Sculpt.prototype = {
   {
     var vAr = this.mesh_.vertexArray_;
     var nbVerts = iVerts.length;
-    var ax = 0,
-      ay = 0,
-      az = 0;
+    var ax = 0.0,
+      ay = 0.0,
+      az = 0.0;
     for (var i = 0; i < nbVerts; ++i)
     {
       var ind = iVerts[i] * 3;
@@ -583,5 +892,143 @@ Sculpt.prototype = {
       az += vAr[ind + 2];
     }
     return [ax / nbVerts, ay / nbVerts, az / nbVerts];
+  },
+
+  /** Set the origin of the 2d line */
+  setLineOrigin: function (mouseX, mouseY)
+  {
+    this.lineOrigin_ = [mouseX, mouseY];
+  },
+
+  /** Update the normal of the 2d line */
+  updateLineNormal: function (mouseX, mouseY)
+  {
+    this.lineNormal_ = [this.lineOrigin_[1] - mouseY, -this.lineOrigin_[0] + mouseX];
+  },
+
+  /** Cut the mesh along a 2d line */
+  cut: function (picking)
+  {
+    var mesh = this.mesh_;
+    var camera = picking.camera_;
+    var height = camera.height_;
+    var lo = this.lineOrigin_;
+    var lox = lo[0],
+      loy = height - lo[1];
+    var ln = this.lineNormal_;
+    var lnx = ln[0],
+      lny = -ln[1];
+
+    // compute the 3D plane origin and normal
+    var planeOrigin = camera.unproject(lox, loy, 0.5),
+      planeNormal = camera.unproject(lox + lnx, loy + lny, 0.5);
+    var matInverse = mat4.create();
+    mat4.invert(matInverse, mesh.matTransform_);
+    vec3.transformMat4(planeOrigin, planeOrigin, matInverse);
+    vec3.transformMat4(planeNormal, planeNormal, matInverse);
+    vec3.sub(planeNormal, planeNormal, planeOrigin);
+    vec3.normalize(planeNormal, planeNormal);
+
+    var topo = new Topology(this.states_);
+    topo.mesh_ = mesh;
+    var planeOffset = this.fillHoles_ ? vec3.scaleAndAdd([0.0, 0.0, 0.0], planeOrigin, planeNormal, 2.0) : planeOrigin;
+    var detailMinSq = topo.cut(planeOffset, planeNormal, this.fillHoles_);
+
+    if (this.fillHoles_)
+      this.uniformProjection(planeOrigin, planeNormal, detailMinSq);
+
+    mesh.updateBuffers();
+
+    this.lineNormal_ = [0.0, 0.0];
+  },
+
+  /** Uniformisation + projection on plane */
+  uniformProjection: function (planeOrigin, planeNormal, detailMinSq)
+  {
+    var mesh = this.mesh_;
+    var vAr = mesh.vertexArray_;
+    var vertices = mesh.vertices_;
+
+    var iTrisCulled = [],
+      iTrisIntersect = [];
+    // the iTrisIntersect are just candidates... there may be some triangles above/below the planes
+    mesh.octree_.cullPlane(planeOrigin, planeNormal, iTrisCulled, iTrisIntersect);
+
+    var iVertsCulled = mesh.getVerticesFromTriangles(iTrisCulled);
+    var iVertsIntersect = mesh.getVerticesFromTriangles(iTrisIntersect);
+
+    // undo-redo
+    this.states_.pushState(iTrisCulled, iVertsCulled);
+    this.states_.pushState(iTrisIntersect, iVertsIntersect);
+
+    var i = 0,
+      id = 0;
+
+    // tag culled vertices
+    ++Vertex.tagMask_;
+    var vertexTagMask = Vertex.tagMask_;
+    var nbVertsCulled = iVertsCulled.length;
+    for (i = 0; i < nbVertsCulled; ++i)
+      vertices[iVertsCulled[i]].tagFlag_ = vertexTagMask;
+
+    var tmp = [0.0, 0.0, 0.0];
+    var nbVertsIntersect = iVertsIntersect.length;
+    for (i = 0; i < nbVertsIntersect; ++i)
+    {
+      id = iVertsIntersect[i];
+      if (vertices[id].tagFlag === vertexTagMask) //already culled
+        continue;
+      tmp[0] = vAr[id * 3];
+      tmp[1] = vAr[id * 3 + 1];
+      tmp[2] = vAr[id * 3 + 2];
+      if (vec3.dot(planeNormal, vec3.sub(tmp, tmp, planeOrigin)) > 0.0)
+        iVertsCulled.push(id);
+    }
+
+    // Subdivide + decimate (uniformisation)
+    var iTris = mesh.getTrianglesFromVertices(iVertsCulled);
+
+    var topo = new Topology(this.states_);
+    topo.mesh_ = mesh;
+    topo.planeOrigin_ = planeOrigin;
+    topo.planeNormal_ = planeNormal;
+    topo.checkPlane_ = true;
+    topo.linearSubdivision_ = true;
+    this.setAdaptiveParameters(topo.radiusSquared_);
+
+    detailMinSq = Math.max(Math.min(detailMinSq * (4.0 - this.subdDetailCut_), 500.0), 10.0);
+    iTris = topo.subdivision(iTris, detailMinSq);
+    iTris = topo.decimation(iTris, detailMinSq / 4.2025);
+
+    // smooth and project
+    vAr = mesh.vertexArray_;
+    var iVerts = mesh.getVerticesFromTriangles(iTris);
+    var nbVerts = iVerts.length;
+    var ax = planeOrigin[0],
+      ay = planeOrigin[1],
+      az = planeOrigin[2];
+    var anx = planeNormal[0],
+      any = planeNormal[1],
+      anz = planeNormal[2];
+    var smoothVerts = new Float32Array(nbVerts * 3);
+    this.laplacianSmooth(iVerts, smoothVerts);
+    for (i = 0; i < nbVerts; ++i)
+    {
+      id = iVerts[i] * 3;
+      var distToPlane = (vAr[id] - ax) * anx + (vAr[id + 1] - ay) * any + (vAr[id + 2] - az) * anz;
+      if (distToPlane < 0.0)
+        continue;
+      id = i * 3;
+      var vsx = smoothVerts[id],
+        vsy = smoothVerts[id + 1],
+        vsz = smoothVerts[id + 2];
+      distToPlane = (vsx - ax) * anx + (vsy - ay) * any + (vsz - az) * anz;
+      id = iVerts[i] * 3;
+      vAr[id] = vsx - anx * distToPlane;
+      vAr[id + 1] = vsy - any * distToPlane;
+      vAr[id + 2] = vsz - anz * distToPlane;
+    }
+
+    mesh.updateMesh(iTris, mesh.getVerticesFromTriangles(iTris));
   }
 };

@@ -1,17 +1,15 @@
 'use strict';
 
-(function() {
-    var lastTime = 0;
-    var vendors = ['moz', 'webkit'];
-    for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
-        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
-    }
-    if (!window.requestAnimationFrame)
-      alert("browser is too old. Probably no webgl there anyway");
-}());
+( function() {
+  var vendors = [ 'moz', 'webkit' ];
+  for ( var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x ) {
+    window.requestAnimationFrame = window[ vendors[ x ] + 'RequestAnimationFrame' ];
+  }
+  if ( !window.requestAnimationFrame )
+    alert( 'browser is too old. Probably no webgl there anyway' );
+}() );
 
-function SculptGL()
-{
+function SculptGL() {
   this.gl_ = null; //webgl context
 
   //controllers stuffs
@@ -25,38 +23,41 @@ function SculptGL()
 
   //symmetry stuffs
   this.symmetry_ = false; //if symmetric sculpting is enabled
-  this.ptPlane_ = [0, 0, 0]; //point origin of the plane symmetry
-  this.nPlane_ = [1, 0, 0]; //normal of plane symmetry
+  this.continuous_ = false; //continuous sculpting
+  this.sculptTimer_ = -1; //continuous interval timer
+  this.pressureRadius_ = 0; //for continuous sculpting
+  this.pressureIntensity_ = 0; //for continuous sculpting
+  this.mouseX_ = 0; //for continuous sculpting
+  this.mouseY_ = 0; //for continuous sculpting
+  this.ptPlane_ = [ 0.0, 0.0, 0.0 ]; //point origin of the plane symmetry
+  this.nPlane_ = [ 1.0, 0.0, 0.0 ]; //normal of plane symmetry
 
   //core of the app
   this.states_ = new States(); //for undo-redo
   this.camera_ = new Camera(); //the camera
-  this.picking_ = new Picking(this.camera_); //the ray picking
-  this.pickingSym_ = new Picking(this.camera_); //the symmetrical picking
-  this.sculpt_ = new Sculpt(this.states_); //sculpting management
+  this.picking_ = new Picking( this.camera_ ); //the ray picking
+  this.pickingSym_ = new Picking( this.camera_ ); //the symmetrical picking
+  this.sculpt_ = new Sculpt( this.states_ ); //sculpting management
+  this.background_ = null; //the background
   this.mesh_ = null; //the mesh
 
   //datas
-  this.textures_ = []; //textures
+  this.textures_ = {}; //textures
   this.shaders_ = {}; //shaders
   this.sphere_ = ''; //sphere
 
   //ui stuffs
-  this.ctrlColor_ = null; //color controller
-  this.ctrlShaders_ = null; //shaders controller
-  this.ctrlSculpt_ = null; //sculpt controller
-  this.ctrlNegative_ = null; //negative sculpting controller
-  this.ctrlNbVertices_ = null; //display number of vertices controller
-  this.ctrlNbTriangles_ = null; //display number of triangles controller
+  this.gui_ = new Gui( this ); //gui
+  this.focusGui_ = false; //gui
 
   //functions
-  this.resetSphere_ = this.resetSphere; //load sphere
-  this.open_ = this.openFile; //open file button (trigger hidden html input...)
-  this.save_ = this.saveFile; //save file function
-  this.exportSketchfab_ = this.exportSketchfab; //upload file on sketchfab
+  this.resetSphere_ = this.resetSphere; //load sphere  
   this.undo_ = this.onUndo; //undo last action
   this.redo_ = this.onRedo; //redo last action
-  this.dummyFunc_ = function () {}; //empty function... stupid trick to get a simple button in dat.gui
+  this.cut_ = this.cut; //apply cut tool
+
+  //render
+  this.queued_ = false; //render stuff
 }
 
 SculptGL.elementIndexType = 0; //element index type (ushort or uint)
@@ -64,566 +65,462 @@ SculptGL.indexArrayType = Uint16Array; //typed array for index element (uint16Ar
 
 SculptGL.prototype = {
   /** Initialization */
-  start: function ()
-  {
-    var self = this;
-    $('#fileopen').change(function (event)
-    {
-      self.loadFile(event);
-    });
+  start: function() {
     this.initWebGL();
     this.loadShaders();
-    this.initGui();
+    this.gui_.initGui();
     this.onWindowResize();
     this.loadTextures();
     this.initEvents();
   },
 
   /** Initialize */
-  initEvents: function ()
-  {
+  initEvents: function() {
     var self = this;
-    var $canvas = $('#canvas');
+    var $canvas = $( '#canvas' );
+    $( '#fileopen' ).change( function( event ) {
+      self.loadFile( event );
+    } );
+    $( '#backgroundopen' ).change( function( event ) {
+      self.loadBackground( event );
+    } );
     // mouse
-    $canvas.mousedown(function (event)
-    {
-      self.onMouseDown(event);
-    });
-    $canvas.mouseup(function (event)
-    {
-      self.onMouseUp(event);
-    });
-    $canvas.mousewheel(function (event, delta)
-    {
-      self.onMouseWheel(event, delta);
-    });
-    $canvas.mousemove(function (event)
-    {
-      self.onMouseMove(event);
-    });
-    $canvas.mouseout(function (event)
-    {
-      self.onMouseOut(event);
-    });
+    $canvas.mousedown( function( event ) {
+      self.onMouseDown( event );
+    } );
+    $canvas.mouseup( function( event ) {
+      self.onMouseUp( event );
+    } );
+    $canvas.mousewheel( function( event ) {
+      self.onMouseWheel( event );
+    } );
+    $canvas.mousemove( function( event ) {
+      self.onMouseMove( event );
+    } );
+    $canvas.mouseout( function( event ) {
+      self.onMouseOut( event );
+    } );
 
     // multi touch
-    $canvas.bind('touchstart', function (event)
-    {
-      self.onTouchStart(event);
-    });
-    $canvas.bind('touchend', function (event)
-    {
-      self.onTouchEnd(event);
-    });
-    $canvas.bind('touchmove', function (event)
-    {
-      self.onTouchMove(event);
-    });
-    $canvas.bind('touchleave', function (event)
-    {
-      self.onMouseOut(event);
-    });
-    $canvas.bind('touchcancel', function (event)
-    {
-      self.onMouseOut(event);
-    });
+    $canvas.bind( 'touchstart', function( event ) {
+      self.onTouchStart( event );
+    } );
+    $canvas.bind( 'touchend', function( event ) {
+      self.onTouchEnd( event );
+    } );
+    $canvas.bind( 'touchmove', function( event ) {
+      self.onTouchMove( event );
+    } );
+    $canvas.bind( 'touchleave', function( event ) {
+      self.onMouseOut( event );
+    } );
+    $canvas.bind( 'touchcancel', function( event ) {
+      self.onMouseOut( event );
+    } );
 
-    $canvas[0].addEventListener('webglcontextlost', self.onContextLost, false);
-    $canvas[0].addEventListener('webglcontextrestored', self.onContextRestored, false);
-    $(window).keydown(function (event)
-    {
-      self.onKeyDown(event);
-    });
-    $(window).keyup(function (event)
-    {
-      self.onKeyUp(event);
-    });
-    $(window).resize(function (event)
-    {
-      self.onWindowResize(event);
-    });
+    $canvas[ 0 ].addEventListener( 'webglcontextlost', self.onContextLost, false );
+    $canvas[ 0 ].addEventListener( 'webglcontextrestored', self.onContextRestored, false );
+    $( window ).keydown( function( event ) {
+      self.onKeyDown( event );
+    } );
+    $( window ).keyup( function( event ) {
+      self.onKeyUp( event );
+    } );
+    $( window ).resize( function( event ) {
+      self.onWindowResize( event );
+    } );
     // prevent touch scroll
-    $(window.body).bind('touchmove', function (event) {
+    $( window.body ).bind( 'touchmove', function( event ) {
       event.preventDefault();
-    });
-
+    } );
   },
 
   /** Load webgl context */
-  initWebGL: function ()
-  {
+  initWebGL: function() {
     var attributes = {
       antialias: false,
       stencil: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: true
     };
-    try
-    {
-      this.gl_ = $('#canvas')[0].getContext('webgl', attributes) || $('#canvas')[0].getContext('experimental-webgl', attributes);
-    }
-    catch (e)
-    {
-      alert('Could not initialise WebGL.');
+    try {
+      this.gl_ = $( '#canvas' )[ 0 ].getContext( 'webgl', attributes ) || $( '#canvas' )[ 0 ].getContext( 'experimental-webgl', attributes );
+    } catch ( e ) {
+      alert( 'Could not initialise WebGL.' );
     }
     var gl = this.gl_;
-    if (gl)
-    {
-      if (gl.getExtension('OES_element_index_uint'))
-      {
+    if ( gl ) {
+      if ( gl.getExtension( 'OES_element_index_uint' ) ) {
         SculptGL.elementIndexType = gl.UNSIGNED_INT;
         SculptGL.indexArrayType = Uint32Array;
-      }
-      else
-      {
+      } else {
         SculptGL.elementIndexType = gl.UNSIGNED_SHORT;
         SculptGL.indexArrayType = Uint16Array;
       }
-      gl.viewportWidth = $(window).width();
-      gl.viewportHeight = $(window).height();
-      gl.clearColor(0.2, 0.2, 0.2, 1);
-      gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LEQUAL);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.viewportWidth = $( window ).width();
+      gl.viewportHeight = $( window ).height();
+      gl.clearColor( 0.2, 0.2, 0.2, 1 );
+      gl.enable( gl.DEPTH_TEST );
+      gl.depthFunc( gl.LEQUAL );
+      gl.blendFunc( gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA );
+      gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
     }
   },
 
   /** Load textures (preload) */
-  loadTextures: function ()
-  {
-    var mat1 = new Image();
+  loadTextures: function() {
     var self = this;
-    mat1.onload = function ()
-    {
-      self.loadSphere();
+    var loadTex = function( path, mode ) {
+      var mat = new Image();
+      mat.src = path;
+      var gl = self.gl_;
+      mat.onload = function() {
+        var idTex = gl.createTexture();
+        gl.bindTexture( gl.TEXTURE_2D, idTex );
+        gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mat );
+        gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR );
+        gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST );
+        gl.generateMipmap( gl.TEXTURE_2D );
+        gl.bindTexture( gl.TEXTURE_2D, null );
+        self.textures_[ mode ] = idTex;
+        if ( mode === Shader.mode.MATERIAL + 2 )
+          self.loadSphere();
+      };
     };
-    mat1.src = 'ressources/clay.jpg';
-    var mat2 = new Image();
-    mat2.src = 'ressources/chavant.jpg';
-    var mat3 = new Image();
-    mat3.src = 'ressources/skin.jpg';
-    var mat4 = new Image();
-    mat4.src = 'ressources/drink.jpg';
-    var mat5 = new Image();
-    mat5.src = 'ressources/redvelvet.jpg';
-    var mat6 = new Image();
-    mat6.src = 'ressources/orange.jpg';
-    var mat7 = new Image();
-    mat7.src = 'ressources/bronze.jpg';
-    this.textures_.push(mat1, mat2, mat3, mat4, mat5, mat6, mat7);
+    loadTex( 'ressources/clay.jpg', Shader.mode.MATERIAL );
+    loadTex( 'ressources/chavant.jpg', Shader.mode.MATERIAL + 1 );
+    loadTex( 'ressources/skin.jpg', Shader.mode.MATERIAL + 2 );
+    loadTex( 'ressources/drink.jpg', Shader.mode.MATERIAL + 3 );
+    loadTex( 'ressources/redvelvet.jpg', Shader.mode.MATERIAL + 4 );
+    loadTex( 'ressources/orange.jpg', Shader.mode.MATERIAL + 5 );
+    loadTex( 'ressources/bronze.jpg', Shader.mode.MATERIAL + 6 );
   },
 
   /** Load shaders as a string */
-  loadShaders: function ()
-  {
-    var xhrShader = function (path)
-    {
+  loadShaders: function() {
+    var xhrShader = function( path ) {
       var shaderXhr = new XMLHttpRequest();
-      shaderXhr.open('GET', path, false);
-      shaderXhr.send(null);
+      shaderXhr.open( 'GET', path, false );
+      shaderXhr.send( null );
       return shaderXhr.responseText;
     };
     var shaders = this.shaders_;
-    shaders.phongVertex = xhrShader('shaders/phongVertex.glsl');
-    shaders.phongFragment = xhrShader('shaders/phongFragment.glsl');
-    shaders.wireframeVertex = xhrShader('shaders/wireframeVertex.glsl');
-    shaders.wireframeFragment = xhrShader('shaders/wireframeFragment.glsl');
-    shaders.transparencyVertex = xhrShader('shaders/transparencyVertex.glsl');
-    shaders.transparencyFragment = xhrShader('shaders/transparencyFragment.glsl');
-    shaders.reflectionVertex = xhrShader('shaders/reflectionVertex.glsl');
-    shaders.reflectionFragment = xhrShader('shaders/reflectionFragment.glsl');
+    shaders.phongVertex = xhrShader( 'shaders/phong.vert' );
+    shaders.phongFragment = xhrShader( 'shaders/phong.frag' );
+    shaders.transparencyVertex = xhrShader( 'shaders/transparency.vert' );
+    shaders.transparencyFragment = xhrShader( 'shaders/transparency.frag' );
+    shaders.wireframeVertex = xhrShader( 'shaders/wireframe.vert' );
+    shaders.wireframeFragment = xhrShader( 'shaders/wireframe.frag' );
+    shaders.normalVertex = xhrShader( 'shaders/normal.vert' );
+    shaders.normalFragment = xhrShader( 'shaders/normal.frag' );
+    shaders.reflectionVertex = xhrShader( 'shaders/reflection.vert' );
+    shaders.reflectionFragment = xhrShader( 'shaders/reflection.frag' );
+    shaders.backgroundVertex = xhrShader( 'shaders/background.vert' );
+    shaders.backgroundFragment = xhrShader( 'shaders/background.frag' );
   },
 
   /** Load the sphere */
-  loadSphere: function ()
-  {
+  loadSphere: function() {
     var sphereXhr = new XMLHttpRequest();
-    sphereXhr.open('GET', 'ressources/sphere.obj', true);
+    sphereXhr.open( 'GET', 'ressources/sphere.obj', true );
     var self = this;
-    sphereXhr.onload = function ()
-    {
+    sphereXhr.onload = function() {
       self.sphere_ = this.responseText;
       self.resetSphere();
     };
-    sphereXhr.send(null);
+    sphereXhr.send( null );
   },
 
-  /** Initialize dat-gui stuffs */
-  initGui: function ()
-  {
-
-    var guiContainer = document.getElementById('gui-container');
-    var guiEditing = new dat.GUI({ autoPlace: false });
-
-    this.initEditingGui(guiEditing);
-    guiContainer.appendChild(guiEditing.domElement);
-
-    this.initMenu();
-  },
-
-  /** Initialize the top menu */
-  initMenu: function()
-  {
-    var self = this;
-
-    // File
-    $('#load-obj').on('click', this.open_.bind(this));
-    $('#save-obj').on('click', this.save_.bind(this));
-
-    // History
-    $('#undo').on('click', this.undo_.bind(this));
-    $('#redo').on('click', this.redo_.bind(this));
-
-    // Options
-    $('.togglable').on('click', function() {
-      var group = $(this).data('radio');
-      if (group) {
-        $(this).siblings('li[data-radio='+group+']').removeClass('checked');
-        $(this).addClass('checked');
-
-        if (group === 'camera-mode') {
-          self.camera_.updateMode(parseInt($(this).data('value'), 10));
-          self.render();
-        }
-      } else {
-        $(this).toggleClass('checked');
-
-        if ($(this).data('value') === 'radius') {
-          this.usePenRadius_ != this.usePenRadius_;
-        } else if ($(this).data('value') === 'intensity') {
-          this.usePenIntensity_ != this.usePenIntensity_;
-        }
-      }
-    });
-
-    // About
-    $('#about').on('click', function() {
-      $('#about-popup').addClass('visible');
-    });
-
-    $('#about-popup .cancel').on('click', function() {
-      $('#about-popup').removeClass('visible');
-    });
-
-    // Buttons
-    $('#reset').on('click', this.resetSphere_.bind(this));
-    $('#export').on('click', this.exportSketchfab_.bind(this));
-  },
-
-  /** Initialize the mesh editing gui (on the right) */
-  initEditingGui: function (gui)
-  {
-    var self = this;
-
-    //sculpt fold
-    var foldSculpt = gui.addFolder('Sculpt');
-    var optionsSculpt = {
-      'Brush (1)': Sculpt.tool.BRUSH,
-      'Inflate (2)': Sculpt.tool.INFLATE,
-      'Rotate (3)': Sculpt.tool.ROTATE,
-      'Smooth (4)': Sculpt.tool.SMOOTH,
-      'Flatten (5)': Sculpt.tool.FLATTEN,
-      'Pinch (6)': Sculpt.tool.PINCH,
-      'Crease (7)': Sculpt.tool.CREASE
-    };
-    this.ctrlSculpt_ = foldSculpt.add(this.sculpt_, 'tool_', optionsSculpt).name('Tool');
-    this.ctrlSculpt_.onChange(function (value)
-    {
-      self.sculpt_.tool_ = parseInt(value, 10);
-    });
-    this.ctrlNegative_ = foldSculpt.add(this.sculpt_, 'negative_').name('Negative (N)');
-    foldSculpt.add(this, 'symmetry_').name('Symmetry');
-    foldSculpt.add(this.sculpt_, 'culling_').name('Sculpt culling');
-    foldSculpt.add(this.picking_, 'rDisplay_', 20, 200).name('Radius');
-    foldSculpt.add(this.sculpt_, 'intensity_', 0, 1).name('Intensity');
-    foldSculpt.open();
-
-    //topo fold
-    var foldTopo = gui.addFolder('Topology');
-    var optionsTopo = {
-      'Static': Sculpt.topo.STATIC,
-      'Subdivision': Sculpt.topo.SUBDIVISION,
-      'Decimation': Sculpt.topo.DECIMATION,
-      'Uniformisation': Sculpt.topo.UNIFORMISATION,
-      'Adaptive (!!!)': Sculpt.topo.ADAPTIVE
-    };
-    var ctrlTopo = foldTopo.add(this.sculpt_, 'topo_', optionsTopo).name('Tool');
-    ctrlTopo.onChange(function (value)
-    {
-      self.sculpt_.topo_ = parseInt(value, 10);
-    });
-    foldTopo.add(this.sculpt_, 'detail_', 0, 1).name('Detail');
-    foldTopo.open();
-
-    //mesh fold
-    var foldMesh = gui.addFolder('Mesh');
-    this.ctrlColor_ = foldMesh.addColor(new Render(), 'color_').name('Color');
-    this.ctrlColor_.onChange(function ()
-    {
-      self.render();
-    });
-    this.ctrlNbVertices_ = foldMesh.add(this, 'dummyFunc_').name('Vertices : 0');
-    this.ctrlNbTriangles_ = foldMesh.add(this, 'dummyFunc_').name('Triangles : 0');
-    // var optionsShaders = {
-    //   'Phong': Render.mode.PHONG,
-    //   'Wireframe (slow)': Render.mode.WIREFRAME,
-    //   'Transparency': Render.mode.TRANSPARENCY,
-    //   'Clay': Render.mode.MATERIAL,
-    //   'Chavant': Render.mode.MATERIAL + 1,
-    //   'Skin': Render.mode.MATERIAL + 2,
-    //   'Drink': Render.mode.MATERIAL + 3,
-    //   'Red velvet': Render.mode.MATERIAL + 4,
-    //   'Orange': Render.mode.MATERIAL + 5,
-    //   'Bronze': Render.mode.MATERIAL + 6
-    // };
-    // this.ctrlShaders_ = foldMesh.add(new Render(), 'shaderType_', optionsShaders).name('Shader');
-    // this.ctrlShaders_.onChange(function (value)
-    // {
-    //   if (self.mesh_)
-    //   {
-    //     self.mesh_.render_.updateShaders(parseInt(value, 10), self.textures_, self.shaders_);
-    //     self.mesh_.updateBuffers();
-    //     self.render();
-    //   }
-    // });
-    foldMesh.open();
-  },
   /** render (3d and Dom) when possible rather than on each event*/
-  animate: function ()
-   {
-     var gl = this.gl_;
-     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-     this.camera_.updateView();
-     if (this.mesh_){
+  animate: function() {
+    var gl = this.gl_;
+    gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+    this.camera_.updateView();
+    if ( this.background_ ) {
+      gl.depthMask( false );
+      this.background_.render();
+      gl.depthMask( true );
+    }
+    if ( this.mesh_ ) {
       this.mesh_.doUpdateBuffers();
-      this.mesh_.render(this.camera_, this.picking_);
-      this.ctrlNbVertices_.name('Vertices : ' + this.mesh_.vertices_.length);
-      this.ctrlNbTriangles_.name('Triangles : ' + this.mesh_.triangles_.length);
-     }
-    this.queued = false;
+      this.mesh_.render( this.camera_, this.picking_, this.sculpt_.lineOrigin_, this.sculpt_.lineNormal_ );
+    }
+    // this.queued = false;
   },
+
   /** Request a render */
-  render: function ()
-  {
-    if (this.queued)
-      return;
-    this.queued = true;
-    window.requestAnimationFrame(this.animate.bind(this));
+  render: function() {
+    // if (this.queued_ === true)
+    //   return;
+    this.queued_ = true;
+    window.requestAnimationFrame( this.animate.bind( this ) );
   },
 
   /** Called when the window is resized */
-  onWindowResize: function ()
-  {
-    var newWidth = $(window).width(),
-      newHeight = $(window).height();
+  onWindowResize: function() {
+    var newWidth = $( window ).width(),
+      newHeight = $( window ).height();
     this.camera_.width_ = newWidth;
     this.camera_.height_ = newHeight;
-    $('#canvas').attr('width', newWidth);
-    $('#canvas').attr('height', newHeight);
+    $( '#canvas' ).attr( 'width', newWidth );
+    $( '#canvas' ).attr( 'height', newHeight );
     var gl = this.gl_;
     gl.viewportWidth = newWidth;
     gl.viewportHeight = newHeight;
-    gl.viewport(0, 0, newWidth, newHeight);
+    gl.viewport( 0, 0, newWidth, newHeight );
     this.camera_.updateProjection();
     this.render();
   },
 
   /** Key pressed event */
-  onKeyDown: function (event)
-  {
+  onKeyDown: function( event ) {
     event.stopPropagation();
-    event.preventDefault();
+    if ( !this.focusGui_ )
+      event.preventDefault();
     var key = event.which;
-    if (event.ctrlKey && key === 90) //z key
+    if ( event.ctrlKey && key === 90 ) //z key
     {
       this.onUndo();
       return;
-    }
-    else if (event.ctrlKey && key === 89) //y key
+    } else if ( event.ctrlKey && key === 89 ) //y key
     {
       this.onRedo();
       return;
     }
-    switch (key)
-    {
-    case 49: // 1
-    case 97: // NUMPAD 1
-      this.ctrlSculpt_.setValue(Sculpt.tool.BRUSH);
-      break;
-    case 50: // 2
-    case 98: // NUMPAD 2
-      this.ctrlSculpt_.setValue(Sculpt.tool.INFLATE);
-      break;
-    case 51: // 3
-    case 99: // NUMPAD 3
-      this.ctrlSculpt_.setValue(Sculpt.tool.ROTATE);
-      break;
-    case 52: // 4
-    case 100: // NUMPAD 4
-      this.ctrlSculpt_.setValue(Sculpt.tool.SMOOTH);
-      break;
-    case 53: // 5
-    case 101: // NUMPAD 5
-      this.ctrlSculpt_.setValue(Sculpt.tool.FLATTEN);
-      break;
-    case 54: // 6
-    case 102: // NUMPAD 6
-      this.ctrlSculpt_.setValue(Sculpt.tool.PINCH);
-      break;
-    case 55: // 7
-    case 103: // NUMPAD 7
-      this.ctrlSculpt_.setValue(Sculpt.tool.CREASE);
-      break;
-    case 78: // N
-      this.ctrlNegative_.setValue(!this.sculpt_.negative_);
-      break;
-    case 37: // LEFT
-    case 81: // Q
-    case 65: // A
-      this.camera_.moveX_ = -1;
-      break;
-    case 39: // RIGHT
-    case 68: // D
-      this.camera_.moveX_ = 1;
-      break;
-    case 38: // UP
-    case 90: // Z
-    case 87: // W
-      this.camera_.moveZ_ = -1;
-      break;
-    case 40: // DOWN
-    case 83: // S
-      this.camera_.moveZ_ = 1;
-      break;
+    if ( event.altKey ) {
+      if ( this.camera_.usePivot_ )
+        this.picking_.intersectionMouseMesh( this.mesh_, this.lastMouseX_, this.lastMouseY_, 0.5 );
+      this.camera_.start( this.lastMouseX_, this.lastMouseY_, this.picking_ );
+    }
+    switch ( key ) {
+      case 48: // 0
+      case 96: // NUMPAD 0
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.SCALE );
+        break;
+      case 49: // 1
+      case 97: // NUMPAD 1
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.BRUSH );
+        break;
+      case 50: // 2
+      case 98: // NUMPAD 2
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.INFLATE );
+        break;
+      case 51: // 3
+      case 99: // NUMPAD 3
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.ROTATE );
+        break;
+      case 52: // 4
+      case 100: // NUMPAD 4
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.SMOOTH );
+        break;
+      case 53: // 5
+      case 101: // NUMPAD 5
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.FLATTEN );
+        break;
+      case 54: // 6
+      case 102: // NUMPAD 6
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.PINCH );
+        break;
+      case 55: // 7
+      case 103: // NUMPAD 7
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.CREASE );
+        break;
+      case 56: // 8
+      case 104: // NUMPAD 8
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.DRAG );
+        break;
+      case 57: // 9
+      case 105: // NUMPAD 9
+        this.gui_.ctrlSculpt_.setValue( Sculpt.tool.COLOR );
+        break;
+      case 78: // N
+        this.gui_.ctrlNegative_.setValue( !this.sculpt_.negative_ );
+        break;
+      case 37: // LEFT
+      case 81: // Q
+      case 65: // A
+        this.camera_.moveX_ = -1;
+        break;
+      case 39: // RIGHT
+      case 68: // D
+        this.camera_.moveX_ = 1;
+        break;
+      case 38: // UP
+      case 90: // Z
+      case 87: // W
+        this.camera_.moveZ_ = -1;
+        break;
+      case 40: // DOWN
+      case 83: // S
+        this.camera_.moveZ_ = 1;
+        break;
     }
     var self = this;
-    if (this.cameraTimer_ === -1)
-      this.cameraTimer_ = setInterval(function ()
-      {
+    if ( this.cameraTimer_ === -1 ) {
+      this.cameraTimer_ = setInterval( function() {
         self.camera_.updateTranslation();
         self.render();
-      }, 20);
+      }, 20 );
+    }
   },
 
   /** Key released event */
-  onKeyUp: function (event)
-  {
+  onKeyUp: function( event ) {
     event.stopPropagation();
     event.preventDefault();
     var key = event.which;
-    switch (key)
-    {
-    case 37: // LEFT
-    case 81: // Q
-    case 65: // A
-    case 39: // RIGHT
-    case 68: // D
-      this.camera_.moveX_ = 0;
-      break;
-    case 38: // UP
-    case 90: // Z
-    case 87: // W
-    case 40: // DOWN
-    case 83: // S
-      this.camera_.moveZ_ = 0;
-      break;
+    switch ( key ) {
+      case 37: // LEFT
+      case 81: // Q
+      case 65: // A
+      case 39: // RIGHT
+      case 68: // D
+        this.camera_.moveX_ = 0;
+        break;
+      case 38: // UP
+      case 90: // Z
+      case 87: // W
+      case 40: // DOWN
+      case 83: // S
+        this.camera_.moveZ_ = 0;
+        break;
+      case 70: //F
+        this.camera_.resetViewFront();
+        this.render();
+        break;
+      case 84: //T
+        this.camera_.resetViewTop();
+        this.render();
+        break;
+      case 76: //L
+        this.camera_.resetViewLeft();
+        this.render();
+        break;
     }
-    if (this.cameraTimer_ !== -1 && this.camera_.moveX_ === 0 && this.camera_.moveZ_ === 0)
-    {
-      clearInterval(this.cameraTimer_);
+    if ( this.cameraTimer_ !== -1 && this.camera_.moveX_ === 0 && this.camera_.moveZ_ === 0 ) {
+      clearInterval( this.cameraTimer_ );
       this.cameraTimer_ = -1;
     }
   },
 
   /** Mouse pressed event */
-  onMouseDown: function (event)
-  {
+  onMouseDown: function( event ) {
     event.stopPropagation();
     event.preventDefault();
     var mouseX = event.pageX,
       mouseY = event.pageY;
     this.mouseButton_ = event.which;
     var button = event.which;
-    if (button === 1)
-    {
-      if (this.mesh_)
-      {
+    var pressure = Tablet.pressure();
+    var pressureRadius = this.usePenRadius_ ? pressure : 1.0;
+    var pressureIntensity = this.usePenIntensity_ ? pressure : 1.0;
+    if ( button === 1 && !event.altKey ) {
+      if ( this.mesh_ ) {
+        this.sumDisplacement_ = 0;
         this.states_.start();
-        if (this.sculpt_.tool_ === Sculpt.tool.ROTATE)
-        {
-          if (this.symmetry_)
-            this.sculpt_.startRotate(this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_);
-          else
-            this.sculpt_.startRotate(this.picking_, mouseX, mouseY);
-        }
+        if ( this.sculpt_.tool_ === Sculpt.tool.CUT )
+          this.sculpt_.setLineOrigin( mouseX, this.camera_.height_ - mouseY );
+        else if ( this.sculpt_.tool_ === Sculpt.tool.ROTATE )
+          this.sculpt_.startRotate( this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_, this.symmetry_ );
+        else if ( this.sculpt_.tool_ === Sculpt.tool.SCALE )
+          this.sculpt_.startScale( this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_, this.symmetry_ );
+        else if ( this.continuous_ && this.sculpt_.tool_ !== Sculpt.tool.DRAG ) {
+          this.pressureRadius_ = pressureRadius;
+          this.pressureIntensity_ = pressureIntensity;
+          this.mouseX_ = mouseX;
+          this.mouseY_ = mouseY;
+          var self = this;
+          this.sculptTimer_ = setInterval( function() {
+            self.sculpt_.sculptStroke( self.mouseX_, self.mouseY_, self.pressureRadius_, self.pressureIntensity_, self );
+            self.gui_.updateMeshInfo();
+            self.render();
+          }, 20 );
+        } else
+          this.sculpt_.sculptStroke( mouseX, mouseY, pressureRadius, pressureIntensity, this );
       }
+    } else if ( button === 3 ) {
+      if ( this.camera_.usePivot_ )
+        this.picking_.intersectionMouseMesh( this.mesh_, mouseX, mouseY, pressureRadius );
+      this.camera_.start( mouseX, mouseY, this.picking_ );
     }
-    else if (button === 3)
-      this.camera_.start(mouseX, mouseY);
   },
 
   /** Mouse released event */
-  onMouseUp: function (event)
-  {
+  onMouseUp: function( event ) {
     event.stopPropagation();
     event.preventDefault();
-    if (this.mesh_)
+    if ( this.mesh_ )
       this.mesh_.checkLeavesUpdate();
+    if ( this.sculptTimer_ !== -1 ) {
+      clearInterval( this.sculptTimer_ );
+      this.sculptTimer_ = -1;
+    }
+    this.gui_.updateMeshInfo();
+    this.mouseButton_ = 0;
+  },
+
+  /** Mouse out event */
+  onMouseOut: function() {
+    if ( this.mesh_ )
+      this.mesh_.checkLeavesUpdate();
+    if ( this.sculptTimer_ !== -1 ) {
+      clearInterval( this.sculptTimer_ );
+      this.sculptTimer_ = -1;
+    }
     this.mouseButton_ = 0;
   },
 
   /** Mouse wheel event */
-  onMouseWheel: function (event, delta)
-  {
+  onMouseWheel: function( event ) {
     event.stopPropagation();
     event.preventDefault();
-    this.camera_.zoom(delta / 100);
+    var dy = event.deltaY;
+    dy = dy > 1.0 ? 1.0 : dy < -1.0 ? -1.0 : dy;
+    this.camera_.zoom( dy * 0.02 );
     this.render();
   },
 
   /** Mouse move event */
-  onMouseMove: function (event)
-  {
+  onMouseMove: function( event ) {
     event.stopPropagation();
     event.preventDefault();
     var mouseX = event.pageX,
       mouseY = event.pageY;
+    var button = this.mouseButton_;
+    var tool = this.sculpt_.tool_;
+    var st = Sculpt.tool;
     var pressure = Tablet.pressure();
-    var pressureRadius = this.usePenRadius_ ? pressure : 1;
-    var pressureIntensity = this.usePenIntensity_ ? pressure : 1;
-    if (this.mesh_ && this.mouseButton_ !== 1)
-      this.picking_.intersectionMouseMesh(this.mesh_, mouseX, mouseY, pressureRadius);
-    if (this.mouseButton_ === 1)
-    {
-      if (this.sculpt_.tool_ !== Sculpt.tool.ROTATE)
-        this.sculptStroke(mouseX, mouseY, pressureRadius, pressureIntensity);
-      else if (this.picking_.mesh_)
-      {
-        this.picking_.pickVerticesInSphere(this.picking_.rWorldSqr_);
-        this.sculpt_.sculptMesh(this.picking_, pressureIntensity, mouseX, mouseY, this.lastMouseX_, this.lastMouseY_);
-        if (this.symmetry_)
-        {
-          this.pickingSym_.pickVerticesInSphere(this.pickingSym_.rWorldSqr_);
-          this.sculpt_.sculptMesh(this.pickingSym_, pressureIntensity, this.lastMouseX_, this.lastMouseY_, mouseX, mouseY, true);
-        }
-      }
-      this.mesh_.updateBuffers();
+    var pressureRadius = this.usePenRadius_ ? pressure : 1.0;
+    var pressureIntensity = this.usePenIntensity_ ? pressure : 1.0;
+    var modifierPressed = event.altKey || event.ctrlKey || event.shiftKey;
+    if ( this.continuous_ && this.sculptTimer_ !== -1 && !modifierPressed ) {
+      this.pressureRadius_ = pressureRadius;
+      this.pressureIntensity_ = pressureIntensity;
+      this.mouseX_ = mouseX;
+      this.mouseY_ = mouseY;
+      return;
     }
-    else if (this.mouseButton_ === 3)
-      this.camera_.rotate(mouseX, mouseY);
-    else if (this.mouseButton_ === 2)
-      this.camera_.translate((mouseX - this.lastMouseX_) / 3000, (mouseY - this.lastMouseY_) / 3000);
+    if ( tool !== st.CUT && this.mesh_ && ( button !== 1 || ( tool !== st.ROTATE && tool !== st.DRAG && tool !== st.SCALE ) ) )
+      this.picking_.intersectionMouseMesh( this.mesh_, mouseX, mouseY, pressureRadius );
+    if ( button === 1 && !event.altKey ) {
+      if ( tool === st.CUT )
+        this.sculpt_.updateLineNormal( mouseX, this.camera_.height_ - mouseY );
+      else {
+        this.sculpt_.sculptStroke( mouseX, mouseY, pressureRadius, pressureIntensity, this );
+        this.gui_.updateMeshInfo();
+      }
+    } else if ( button === 3 || ( event.altKey && !event.shiftKey && !event.ctrlKey ) )
+      this.camera_.rotate( mouseX, mouseY );
+    else if ( button === 2 || ( event.altKey && event.shiftKey ) )
+      this.camera_.translate( ( mouseX - this.lastMouseX_ ) / 3000.0, ( mouseY - this.lastMouseY_ ) / 3000.0 );
+    else if ( event.altKey && event.ctrlKey )
+      this.camera_.zoom( ( mouseY - this.lastMouseY_ ) / 3000.0 );
     this.lastMouseX_ = mouseX;
     this.lastMouseY_ = mouseY;
     this.render();
   },
 
-
   /** touch start event */
-  onTouchStart: function (event)
-  {
-    event.stopPropagation();
-    event.preventDefault();
+  onTouchStart: function( event ) {
     var touches = event.originalEvent.targetTouches;
     /*for (var i = 0; i < touches; i) {
         var touch = touches[i];
@@ -632,41 +529,60 @@ SculptGL.prototype = {
 
     event.stopPropagation();
     event.preventDefault();
-    var mouseX = touches[0].pageX,
-      mouseY = touches[0].pageY;
+    var mouseX = touches[ 0 ].pageX,
+      mouseY = touches[ 0 ].pageY;
     this.mouseButton_ = touches.length;
+    var pressure = Tablet.pressure();
+    var pressureRadius = this.usePenRadius_ ? pressure : 1.0;
+    var pressureIntensity = this.usePenIntensity_ ? pressure : 1.0;
     var button = touches.length;
-    if (button === 1)
-    {
-      if (this.mesh_)
-      {
+    if ( button === 1 ) {
+      if ( this.mesh_ ) {
+        this.sumDisplacement_ = 0;
         this.states_.start();
-        if (this.sculpt_.tool_ === Sculpt.tool.ROTATE)
-        {
-          if (this.symmetry_)
-            this.sculpt_.startRotate(this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_);
-          else
-            this.sculpt_.startRotate(this.picking_, mouseX, mouseY);
-        }
+        if ( this.sculpt_.tool_ === Sculpt.tool.CUT )
+          this.sculpt_.setLineOrigin( mouseX, this.camera_.height_ - mouseY );
+        else if ( this.sculpt_.tool_ === Sculpt.tool.ROTATE )
+          this.sculpt_.startRotate( this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_, this.symmetry_ );
+        else if ( this.sculpt_.tool_ === Sculpt.tool.SCALE )
+          this.sculpt_.startScale( this.picking_, mouseX, mouseY, this.pickingSym_, this.ptPlane_, this.nPlane_, this.symmetry_ );
+        else if ( this.continuous_ && this.sculpt_.tool_ !== Sculpt.tool.DRAG ) {
+          this.pressureRadius_ = pressureRadius;
+          this.pressureIntensity_ = pressureIntensity;
+          this.mouseX_ = mouseX;
+          this.mouseY_ = mouseY;
+          var self = this;
+          this.sculptTimer_ = setInterval( function() {
+            self.sculpt_.sculptStroke( self.mouseX_, self.mouseY_, self.pressureRadius_, self.pressureIntensity_, self );
+            self.gui_.updateMeshInfo();
+            self.render();
+          }, 20 );
+        } else
+          this.sculpt_.sculptStroke( mouseX, mouseY, pressureRadius, pressureIntensity, this );
       }
+    } else if ( button === 3 ) {
+      if ( this.camera_.usePivot_ )
+        this.picking_.intersectionMouseMesh( this.mesh_, mouseX, mouseY, pressureRadius );
+      this.camera_.start( mouseX, mouseY, this.picking_ );
     }
-    else if (button === 3)
-      this.camera_.start(mouseX, mouseY);
   },
 
   /** touch end event */
-  onTouchEnd: function (event)
-  {
+  onTouchEnd: function( event ) {
     event.stopPropagation();
     event.preventDefault();
-    if (this.mesh_)
+    if ( this.mesh_ )
       this.mesh_.checkLeavesUpdate();
+    if ( this.sculptTimer_ !== -1 ) {
+      clearInterval( this.sculptTimer_ );
+      this.sculptTimer_ = -1;
+    }
+    this.gui_.updateMeshInfo();
     this.mouseButton_ = 0;
   },
 
   /** touch move event */
-  onTouchMove: function (event, delta)
-  {
+  onTouchMove: function( event ) {
     var touches = event.originalEvent.targetTouches;
     /*for (var i = 0; i < touches; i) {
         var touch = touches[i];
@@ -675,139 +591,127 @@ SculptGL.prototype = {
 
     event.stopPropagation();
     event.preventDefault();
-    var mouseX = touches[0].pageX,
-      mouseY = touches[0].pageY;
+    var mouseX = touches[ 0 ].pageX,
+      mouseY = touches[ 0 ].pageY;
+    var button = this.mouseButton_;
+    var tool = this.sculpt_.tool_;
+    var st = Sculpt.tool;
     var pressure = Tablet.pressure();
-    var pressureRadius = this.usePenRadius_ ? pressure : 1;
-    var pressureIntensity = this.usePenIntensity_ ? pressure : 1;
-    if (this.mesh_ && this.mouseButton_ !== 1)
-      this.picking_.intersectionMouseMesh(this.mesh_, mouseX, mouseY, pressureRadius);
-    if (touches.length === 1)
-    {
-      if (this.sculpt_.tool_ !== Sculpt.tool.ROTATE)
-        this.sculptStroke(mouseX, mouseY, pressureRadius, pressureIntensity);
-      else if (this.picking_.mesh_)
-      {
-        this.picking_.pickVerticesInSphere(this.picking_.rWorldSqr_);
-        this.sculpt_.sculptMesh(this.picking_, pressureIntensity, mouseX, mouseY, this.lastMouseX_, this.lastMouseY_);
-        if (this.symmetry_)
-        {
-          this.pickingSym_.pickVerticesInSphere(this.pickingSym_.rWorldSqr_);
-          this.sculpt_.sculptMesh(this.pickingSym_, pressureIntensity, this.lastMouseX_, this.lastMouseY_, mouseX, mouseY, true);
-        }
+    var pressureRadius = this.usePenRadius_ ? pressure : 1.0;
+    var pressureIntensity = this.usePenIntensity_ ? pressure : 1.0;
+    var modifierPressed = event.altKey || event.ctrlKey || event.shiftKey;
+    if ( this.continuous_ && this.sculptTimer_ !== -1 && !modifierPressed ) {
+      this.pressureRadius_ = pressureRadius;
+      this.pressureIntensity_ = pressureIntensity;
+      this.mouseX_ = mouseX;
+      this.mouseY_ = mouseY;
+      return;
+    }
+    if ( tool !== st.CUT && this.mesh_ && ( button !== 1 || ( tool !== st.ROTATE && tool !== st.DRAG && tool !== st.SCALE ) ) )
+      this.picking_.intersectionMouseMesh( this.mesh_, mouseX, mouseY, pressureRadius );
+    if ( button === 1 && !event.altKey ) {
+      if ( tool === st.CUT )
+        this.sculpt_.updateLineNormal( mouseX, this.camera_.height_ - mouseY );
+      else {
+        this.sculpt_.sculptStroke( mouseX, mouseY, pressureRadius, pressureIntensity, this );
+        this.gui_.updateMeshInfo();
       }
-      this.mesh_.updateBuffers();
-    }
-    else if (touches.length === 3){
-      this.camera_.rotate(mouseX, mouseY);
-    }
-    else if (touches.length === 2){
-      this.camera_.translate((mouseX - this.lastMouseX_) / 3000, (mouseY - this.lastMouseY_) / 3000);
-    }
+    } else if ( button === 3 || ( event.altKey && !event.shiftKey && !event.ctrlKey ) )
+      this.camera_.rotate( mouseX, mouseY );
+    else if ( button === 2 || ( event.altKey && event.shiftKey ) )
+      this.camera_.translate( ( mouseX - this.lastMouseX_ ) / 3000.0, ( mouseY - this.lastMouseY_ ) / 3000.0 );
+    else if ( event.altKey && event.ctrlKey )
+      this.camera_.zoom( ( mouseY - this.lastMouseY_ ) / 3000.0 );
     this.lastMouseX_ = mouseX;
     this.lastMouseY_ = mouseY;
     this.render();
   },
-  /** Make a brush stroke */
-  sculptStroke: function (mouseX, mouseY, pressureRadius, pressureIntensity)
-  {
-    var ptPlane = this.ptPlane_,
-      nPlane = this.nPlane_;
-    var picking = this.picking_,
-      pickingSym = this.pickingSym_;
-    var dx = mouseX - this.lastMouseX_,
-      dy = mouseY - this.lastMouseY_;
-    var dist = Math.sqrt(dx * dx + dy * dy);
-    this.sumDisplacement_ += dist;
-    var minSpacing = 0.2 * picking.rDisplay_;
-    var step = dist / Math.floor(dist / minSpacing);
-    dx /= dist;
-    dy /= dist;
-    mouseX = this.lastMouseX_;
-    mouseY = this.lastMouseY_;
-    var mesh = this.mesh_;
-    var sym = this.symmetry_;
-    var sculpt = this.sculpt_;
-    if (this.sumDisplacement_ > minSpacing * 50.0)
-      this.sumDisplacement_ = 0;
-    else if (this.sumDisplacement_ > minSpacing)
-    {
-      this.sumDisplacement_ = 0;
-      for (var i = 0; i < dist; i += step)
-      {
-        picking.intersectionMouseMesh(mesh, mouseX, mouseY, pressureRadius);
-        if (!picking.mesh_)
-          break;
-        picking.pickVerticesInSphere(picking.rWorldSqr_);
-        sculpt.sculptMesh(picking, pressureIntensity);
-        if (sym)
-        {
-          pickingSym.intersectionMouseMesh(mesh, mouseX, mouseY, pressureRadius, ptPlane, nPlane);
-          if (!pickingSym.mesh_)
-            break;
-          pickingSym.rWorldSqr_ = picking.rWorldSqr_;
-          pickingSym.pickVerticesInSphere(pickingSym.rWorldSqr_);
-          sculpt.sculptMesh(pickingSym, pressureIntensity);
-        }
-        mouseX += dx * step;
-        mouseY += dy * step;
-      }
-    }
-  },
-
-  /** Mouse out event */
-  onMouseOut: function ()
-  {
-    this.mouseButton_ = 0;
-  },
 
   /** WebGL context is lost */
-  onContextLost: function ()
-  {
-    alert('shit happens : context lost');
+  onContextLost: function() {
+    alert( 'shit happens : context lost' );
   },
 
   /** WebGL context is restored */
-  onContextRestored: function ()
-  {
-    alert('context is restored');
+  onContextRestored: function() {
+    alert( 'context is restored' );
   },
 
   /** Load file */
-  loadFile: function (event)
-  {
+  loadFile: function( event ) {
     event.stopPropagation();
     event.preventDefault();
-    if (event.target.files.length === 0)
+    if ( event.target.files.length === 0 )
       return;
-    var file = event.target.files[0];
-    var name = file.name;
-    if (!name.endsWith('.obj'))
+    var file = event.target.files[ 0 ];
+    var name = file.name.toLowerCase();
+    var fileType = '';
+    fileType = name.endsWith( '.obj' ) ? 'obj' : fileType;
+    fileType = name.endsWith( '.stl' ) ? 'stl' : fileType;
+    fileType = name.endsWith( '.ply' ) ? 'ply' : fileType;
+    if ( fileType === '' )
       return;
     var reader = new FileReader();
     var self = this;
-    reader.onload = function (evt)
-    {
+    reader.onload = function( evt ) {
       self.startMeshLoad();
-      Files.loadOBJ(evt.target.result, self.mesh_);
+      if ( fileType === 'obj' )
+        Import.importOBJ( evt.target.result, self.mesh_ );
+      else if ( fileType === 'stl' )
+        Import.importSTL( evt.target.result, self.mesh_ );
+      else if ( fileType === 'ply' )
+        Import.importPLY( evt.target.result, self.mesh_ );
       self.endMeshLoad();
-      $('#fileopen').replaceWith($('#fileopen').clone(true));
+      $( '#fileopen' ).replaceWith( $( '#fileopen' ).clone( true ) );
     };
-    reader.readAsText(file);
+    if ( fileType === 'obj' )
+      reader.readAsText( file );
+    else if ( fileType === 'stl' )
+      reader.readAsBinaryString( file );
+    else if ( fileType === 'ply' )
+      reader.readAsBinaryString( file );
+  },
+
+  /** Load background */
+  loadBackground: function( event ) {
+    if ( event.target.files.length === 0 )
+      return;
+    var file = event.target.files[ 0 ];
+    if ( !file.type.match( 'image.*' ) )
+      return;
+    if ( !this.background_ ) {
+      this.background_ = new Background( this.gl_ );
+      this.background_.init( this.shaders_ );
+    }
+    var reader = new FileReader();
+    var self = this;
+    reader.onload = function( evt ) {
+      var bg = new Image();
+      bg.src = evt.target.result;
+      self.background_.loadBackgroundTexture( bg );
+      self.render();
+      $( '#backgroundopen' ).replaceWith( $( '#backgroundopen' ).clone( true ) );
+    };
+    reader.readAsDataURL( file );
   },
 
   /** Open file */
-  resetSphere: function ()
-  {
+  resetSphere: function() {
     this.startMeshLoad();
-    Files.loadOBJ(this.sphere_, this.mesh_);
+    Import.importOBJ( this.sphere_, this.mesh_ );
     this.endMeshLoad();
   },
 
+  /** Apply cut tool */
+  cut: function() {
+    this.sculpt_.cut( this.picking_ );
+    this.gui_.updateMeshInfo();
+    this.render();
+  },
+
   /** Initialization before loading the mesh */
-  startMeshLoad: function ()
-  {
-    this.mesh_ = new Mesh(this.gl_);
+  startMeshLoad: function() {
+    this.mesh_ = new Mesh( this.gl_ );
     this.states_.reset();
     this.states_.mesh_ = this.mesh_;
     this.sculpt_.mesh_ = this.mesh_;
@@ -819,79 +723,68 @@ SculptGL.prototype = {
   },
 
   /** The loading is finished, set stuffs ... and update camera */
-  endMeshLoad: function ()
-  {
+  endMeshLoad: function() {
     var mesh = this.mesh_;
-    mesh.render_.shaderType_ = Render.mode.MATERIAL;
-    mesh.initMesh(this.textures_, this.shaders_);
-    mesh.moveTo([0, 0, 0]);
-    var length = vec3.dist(mesh.octree_.aabbLoose_.max_, mesh.octree_.aabbLoose_.min_);
+    mesh.initMesh();
+    mesh.moveTo( [ 0.0, 0.0, 0.0 ] );
     this.camera_.reset();
-    this.camera_.globalScale_ = length;
-    this.camera_.zoom(-0.4);
-    this.updateGuiMesh();
+    this.gui_.updateMesh( mesh );
+    mesh.initRender( mesh.render_.shader_.type_, this.textures_, this.shaders_ );
     this.render();
   },
 
   /** Update information on mesh */
-  updateGuiMesh: function ()
-  {
-    if (!this.mesh_)
+  updateGuiMesh: function() {
+    if ( !this.mesh_ )
       return;
     var mesh = this.mesh_;
     this.ctrlColor_.object = mesh.render_;
     this.ctrlColor_.updateDisplay();
     // this.ctrlShaders_.object = mesh.render_;
     // this.ctrlShaders_.updateDisplay();
-    this.ctrlNbVertices_.name('Vertices : ' + mesh.vertices_.length);
-    this.ctrlNbTriangles_.name('Triangles : ' + mesh.triangles_.length);
+    this.ctrlNbVertices_.name( 'Vertices : ' + mesh.vertices_.length );
+    this.ctrlNbTriangles_.name( 'Triangles : ' + mesh.triangles_.length );
   },
 
   /** Open file */
-  openFile: function ()
-  {
-    $('#fileopen').trigger('click');
+  openFile: function() {
+    $( '#fileopen' ).trigger( 'click' );
   },
 
   /** Save file */
-  saveFile: function ()
-  {
-    if (!this.mesh_)
+  saveFile: function() {
+    if ( !this.mesh_ )
       return;
-    var data = [Files.exportOBJ(this.mesh_)];
-    var blob = new Blob(data,
-    {
+    var data = [ Files.exportOBJ( this.mesh_ ) ];
+    var blob = new Blob( data, {
       type: 'text/plain;charset=utf-8'
-    });
-    saveAs(blob, 'yourMesh.obj');
+    } );
+    saveAs( blob, 'yourMesh.obj' );
   },
 
   /** Export to Sketchfab */
-  exportSketchfab: function()
-  {
-    if(!this.mesh_)
+  exportSketchfab: function() {
+    if ( !this.mesh_ )
       return;
-    Files.exportSketchfab(this.mesh_, this.ctrlColor_.__color.__state);
+    Files.exportSketchfab( this.mesh_ );
 
     // Prevent shortcut keys from triggering in Sketchfab export
-    $('.skfb-uploader').on('keydown', function(e) {
+    $( '.skfb-uploader' ).on( 'keydown', function( e ) {
       e.stopPropagation();
-    });
+    } );
   },
 
   /** When the user undos an action */
-  onUndo: function ()
-  {
+  onUndo: function() {
     this.states_.undo();
     this.render();
-    this.updateGuiMesh();
+    this.gui_.updateMeshInfo();
   },
 
   /** When the user redos an action */
-  onRedo: function ()
-  {
+  onRedo: function() {
     this.states_.redo();
     this.render();
-    this.updateGuiMesh();
+    this.gui_.updateMeshInfo();
   }
 };

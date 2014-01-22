@@ -19,9 +19,9 @@ Topology.prototype.adaptTopology = function (iTris, d2Thickness)
   var cx = center[0],
     cy = center[1],
     cz = center[2];
-  var dx = 0,
-    dy = 0,
-    dz = 0;
+  var dx = 0.0,
+    dy = 0.0,
+    dz = 0.0;
   for (i = 0; i < nbVerts; ++i)
   {
     var iVert = iVerts[i];
@@ -156,8 +156,6 @@ Topology.prototype.vertexJoin = function (iv1, iv2)
 {
   var mesh = this.mesh_;
   var vertices = mesh.vertices_;
-  var vAr = mesh.vertexArray_;
-  var nAr = mesh.normalArray_;
 
   var v1 = vertices[iv1],
     v2 = vertices[iv2];
@@ -170,27 +168,9 @@ Topology.prototype.vertexJoin = function (iv1, iv2)
     nbRing2 = ring2.length;
 
   //undo-redo
-  var meshStateMask = Mesh.stateMask_;
   this.states_.pushState(iTris1, ring1);
   this.states_.pushState(iTris2, ring2);
-  var curUndo = this.states_.undos_[this.states_.curUndoIndex_];
-  var id = 0;
-  if (v1.stateFlag_ !== meshStateMask)
-  {
-    id = iv1 * 3;
-    v1.stateFlag_ = meshStateMask;
-    curUndo.vState_.push(v1.clone());
-    curUndo.vArState_.push(vAr[id], vAr[id + 1], vAr[id + 2]);
-    curUndo.nArState_.push(nAr[id], nAr[id + 1], nAr[id + 2]);
-  }
-  if (v2.stateFlag_ !== meshStateMask)
-  {
-    id = iv2 * 3;
-    v1.stateFlag_ = meshStateMask;
-    curUndo.vState_.push(v2.clone());
-    curUndo.vArState_.push(vAr[id], vAr[id + 1], vAr[id + 2]);
-    curUndo.nArState_.push(nAr[id], nAr[id + 1], nAr[id + 2]);
-  }
+  this.states_.pushState(null, [iv1, iv2]);
 
   var edges1 = [],
     edges2 = [];
@@ -211,7 +191,7 @@ Topology.prototype.vertexJoin = function (iv1, iv2)
   {
     return a - b;
   });
-  var common = Tools.intersectionArrays(ring1, ring2);
+  var common = Utils.intersectionArrays(ring1, ring2);
 
   if (common.length === 0)
     this.connect1Ring(edges1, edges2);
@@ -555,7 +535,7 @@ Topology.prototype.matchEdgesCommonVertices = function (edges1, edges2, ivCommon
       break;
     }
   }
-  edges1.rotate(match);
+  Utils.rotateArray(edges1, match);
 
   var nbEdges2 = edges2.length;
   match = -1;
@@ -567,9 +547,8 @@ Topology.prototype.matchEdgesCommonVertices = function (edges1, edges2, ivCommon
       break;
     }
   }
-  edges2.rotate(match);
+  Utils.rotateArray(edges2, match);
 };
-
 
 /** Adjust edges orientation taking the closest vertex as a starting point */
 Topology.prototype.matchEdgesNearest = function (edges1, edges2)
@@ -601,7 +580,7 @@ Topology.prototype.matchEdgesNearest = function (edges1, edges2)
       nearest = i;
     }
   }
-  edges2.rotate(nearest);
+  Utils.rotateArray(edges2, nearest);
 };
 
 /** Clean up neighborhood */
@@ -623,6 +602,7 @@ Topology.prototype.cleanUpSingularVertex = function (iv)
   var vertices = mesh.vertices_;
   var vAr = mesh.vertexArray_;
   var nAr = mesh.normalArray_;
+  var cAr = mesh.colorArray_;
   var iAr = mesh.indexArray_;
 
   var v = vertices[iv];
@@ -638,18 +618,13 @@ Topology.prototype.cleanUpSingularVertex = function (iv)
   var nx = nAr[id],
     ny = nAr[id + 1],
     nz = nAr[id + 2];
+  var cr = cAr[id],
+    cg = cAr[id + 1],
+    cb = cAr[id + 2];
 
   //undo-redo
   this.states_.pushState(v.tIndices_, v.ringVertices_);
-  var meshStateMask = Mesh.stateMask_;
-  var curUndo = this.states_.undos_[this.states_.curUndoIndex_];
-  if (v.stateFlag_ !== meshStateMask)
-  {
-    v.stateFlag_ = meshStateMask;
-    curUndo.vState_.push(v.clone());
-    curUndo.vArState_.push(vx, vy, vz);
-    curUndo.nArState_.push(nx, ny, nz);
-  }
+  this.states_.pushState(null, [iv]);
 
   if (this.deleteVertexIfDegenerate(iv))
     return;
@@ -676,9 +651,14 @@ Topology.prototype.cleanUpSingularVertex = function (iv)
     return;
 
   this.checkArrayLength(1); //XXX
+  vAr = mesh.vertexArray_;
+  nAr = mesh.normalArray_;
+  cAr = mesh.colorArray_;
+  iAr = mesh.indexArray_;
+
   var ivNew = vertices.length;
   var vNew = new Vertex(ivNew);
-  vNew.stateFlag_ = meshStateMask;
+  vNew.stateFlag_ = Mesh.stateMask_;
   id = ivNew * 3;
   vAr[id] = vx;
   vAr[id + 1] = vy;
@@ -686,6 +666,9 @@ Topology.prototype.cleanUpSingularVertex = function (iv)
   nAr[id] = -nx;
   nAr[id + 1] = -ny;
   nAr[id + 2] = -nz;
+  cAr[id] = cr;
+  cAr[id + 1] = cg;
+  cAr[id + 2] = cb;
 
   for (i = 0; i <= endLoop; ++i)
   {
@@ -733,7 +716,7 @@ Topology.prototype.deleteVertexIfDegenerate = function (iv)
   if (v.tagFlag_ < 0)
     return true;
 
-  Tools.tidy(v.tIndices_);
+  Utils.tidy(v.tIndices_);
   var nbTris = v.tIndices_.length;
   var i = 0,
     id = 0,
@@ -751,7 +734,7 @@ Topology.prototype.deleteVertexIfDegenerate = function (iv)
     id = iTri * 3;
     var verts = [];
     verts.push(iAr[id], iAr[id + 1], iAr[id + 2]);
-    Tools.tidy(verts);
+    Utils.tidy(verts);
     var nbVerts = verts.length;
     for (i = 0; i < nbVerts; ++i)
     {
@@ -784,7 +767,7 @@ Topology.prototype.deleteVertexIfDegenerate = function (iv)
     id = iTri1 * 3;
     var verts1 = [];
     verts1.push(iAr[id], iAr[id + 1], iAr[id + 2]);
-    Tools.tidy(verts1);
+    Utils.tidy(verts1);
     var nbVerts1 = verts1.length;
     for (i = 0; i < nbVerts1; ++i)
     {
@@ -801,7 +784,7 @@ Topology.prototype.deleteVertexIfDegenerate = function (iv)
     var verts2 = [];
     verts2.push(iAr[id], iAr[id + 1], iAr[id + 2]);
 
-    Tools.tidy(verts2);
+    Utils.tidy(verts2);
     var nbVerts2 = verts2.length;
     for (i = 0; i < nbVerts2; ++i)
     {

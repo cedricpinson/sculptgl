@@ -2,13 +2,24 @@
 <html lang='en'>
 <head>
   <meta charset='utf-8' />
-  <meta name='description' content='SculptGL is a small sculpting application powered by JavaScript and webGL.'>
-  <meta name='author' content='stéphane GINIER'>
-  <title> SculptGL - A WebGL sculpting app </title>
-  <link rel='stylesheet' href='css/style.css' type='text/css' />
-  <script src='lib/jquery-1.10.2.min.js'></script>
+  <meta name='description' content='Sculptfab is a very simple tool letting you sculpt 3D models in the browser, and publish them in 1 click to sketchfab.com'/>
+  <meta name='author' content='Sketchfab + Stéphane GINIER'>
+  <title> SculptFab - SculptGL + Sketchfab </title>
+  <link rel='stylesheet' href='css/base.css' type='text/css' />
+  <link rel='stylesheet' href='css/font-awesome.css' type='text/css' />
+  <link href='http://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,600,300,700,800' rel='stylesheet' type='text/css'>
+  <script src='lib/jquery-2.0.3.min.js'></script>
   <script src='lib/jquery.mousewheel.js'></script>
   <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-22680456-8', 'sculptfab.com');
+  ga('send', 'pageview');
+
+
   'use strict';
   $(document).ready(function ()
   {
@@ -18,27 +29,106 @@
   </script>
 </head>
 <!--
- ____             _       _    ____ _     
-/ ___|  ___ _   _| |_ __ | |_ / ___| |    
-\___ \ / __| | | | | '_ \| __| |  _| |    
- ___) | (__| |_| | | |_) | |_| |_| | |___ 
+ ____             _       _    ____ _
+/ ___|  ___ _   _| |_ __ | |_ / ___| |
+\___ \ / __| | | | | '_ \| __| |  _| |
+ ___) | (__| |_| | | |_) | |_| |_| | |___
 |____/ \___|\__,_|_| .__/ \__|\____|_____|
                    |_|
-A tiny sculpting application. This is basically a port in JavaScript/WebGL 
+A tiny sculpting application. This is basically a port in JavaScript/WebGL
 from a previous C++/OpenGL application that I made.
 
 Stéphane GINIER
 -->
 <body oncontextmenu='return false;'>
   <input type='file' id='fileopen' style='display: none'/>
+  <input type='file' id='backgroundopen' style='display: none'/>
   <canvas id='canvas'></canvas>
 
+  <!-- HUD -->
+  <div id='topbar'>
+    <div class='logo'>
+      <img src='ressources/logo.png'>
+    </div>
+    <div class='main-menu'>
+      <ul>
+        <li>File
+          <ul class='sub-menu'>
+            <li id='load-file'>Load (.obj, .ply, .stl)</li>
+            <li id='save-obj'>Save .obj</li>
+            <li id='save-ply'>Save .ply</li>
+            <li id='save-stl'>Save .stl</li>
+          </ul>
+        </li>
+        <li>History
+          <ul class='sub-menu'>
+            <li id='undo'>Undo<span class='shortcut'>CTRL+Z</span></li>
+            <li id='redo'>Redo<span class='shortcut'>CTRL+Y</span></li>
+          </ul>
+        </li>
+        <li>Camera
+          <ul class='sub-menu options'>
+            <li id='resetcamera'>Reset</li>
+            <li class='group-title'>Trackball mode</li>
+            <li class='togglable checked' data-radio='camera-mode' data-value='1'>Plane</li>
+            <li class='togglable' data-radio='camera-mode' data-value='0'>Spherical</li>
+            <li class='group-title'>Projection</li>
+            <li id='perspective' class='togglable checked' data-radio='camera-type' data-value='0'>Perspective</li>
+            <li id='orthographic' class='togglable' data-radio='camera-type' data-value='1'>Orthographic</li>
+            <li class='group-title'>Pivot</li>
+            <li class='togglable' data-value='pivot'>Picking pivot</li>
+          </ul>
+        </li>
+        <li>Options
+          <ul class='sub-menu options'>
+            <li class='group-title'>Wacom Tablet</li>
+            <li class='togglable checked' data-value='radius'>Pressure radius</li>
+            <li class='togglable' data-value='intensity'>Pressure intensity</li>
+          </ul>
+        </li>
+        <li>Background
+          <ul class='sub-menu'>
+            <li id='resetbg'>Reset</li>
+            <li id='importbg'>Import (.jpg, .png)</li>
+          </ul>
+        </li>
+        <li id='about'>About</li>
+      </ul>
+    </div>
+    <div class='main-actions'>
+      <div id='reset' class='reset'><i class='icon-refresh'></i>Reset sphere</div>
+      <div id='export' class='export-button'><i class='icon-cloud-upload'></i>Publish to Sketchfab</div>
+    </div>
+  </div>
+  <div id='gui-container'></div>
+  <div id='about-popup' class='modal'>
+    <h1>About Sculptfab</h1>
+      <p>
+        SculptGL + Sketchfab<br/>
+      </p>
+      <p>
+        Sculptfab is a very simple tool letting you sculpt 3D models in the browser, and publish them in 1 click to <a href='sketchfab.com'>sketchfab.com</a>
+
+        <a href='mailto:contact@sculptfab.com'>contact@sculptfab.com</a>
+      </p>
+      <p>Based on <a href='http://stephaneginier.com/sculptgl/' target='_blank'>SculptGL</a> by Stéphane Ginier.</p>
+      <span class='cancel'><i class='icon-remove'></i></span>
+  </div>
+
+  <!-- wacom tablet plugin -->
+  <object id='tablet-plugin' type='application/x-wacomtabletplugin'></object>
+
   <!-- 3rd party libraries -->
-  <script src='http://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.5/dat.gui.min.js' > </script>
+  <script src='lib/dat.gui.js' > </script>
   <script src='lib/filesaver.min.js'></script>
   <script src='lib/gl-matrix-min.js'></script>
+  <script src='lib/jszip.js' > </script>
+  <script src='lib/jszip-deflate.js' > </script>
+  <script src='lib/underscore.js' > </script>
+  <script src='lib/sketchfab-upload.js' > </script>
+  <script src='lib/poly2tri.min.js'></script>
 
-  <!-- minified sculptgl -->
+  <!-- main -->
   <script src='sculptgl.min.js'></script>
 </body>
 </html>

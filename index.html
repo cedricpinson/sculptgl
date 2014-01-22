@@ -8,7 +8,7 @@
   <link rel='stylesheet' href='css/base.css' type='text/css' />
   <link rel='stylesheet' href='css/font-awesome.css' type='text/css' />
   <link href='http://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,600,300,700,800' rel='stylesheet' type='text/css'>
-  <script src='lib/jquery-1.10.2.min.js'></script>
+  <script src='lib/jquery-2.0.3.min.js'></script>
   <script src='lib/jquery.mousewheel.js'></script>
   <script>
   (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
@@ -42,62 +42,81 @@ Stéphane GINIER
 -->
 <body oncontextmenu='return false;'>
   <input type='file' id='fileopen' style='display: none'/>
+  <input type='file' id='backgroundopen' style='display: none'/>
   <canvas id='canvas'></canvas>
 
   <!-- HUD -->
-  <div id="topbar">
-    <div class="logo">
-      <img src="/ressources/logo.png">
+  <div id='topbar'>
+    <div class='logo'>
+      <img src='ressources/logo.png'>
     </div>
-    <div class="main-menu">
+    <div class='main-menu'>
       <ul>
         <li>File
-          <ul class="sub-menu">
-            <li id="load-obj">Load .obj</li>
-            <li id="save-obj">Save .obj</li>
+          <ul class='sub-menu'>
+            <li id='load-file'>Load (.obj, .ply, .stl)</li>
+            <li id='save-obj'>Save .obj</li>
+            <li id='save-ply'>Save .ply</li>
+            <li id='save-stl'>Save .stl</li>
           </ul>
         </li>
         <li>History
-          <ul class="sub-menu">
-            <li id="undo">Undo<span class="shortcut">CTRL+Z</span></li>
-            <li id="redo">Redo<span class="shortcut">CTRL+Y</span></li>
+          <ul class='sub-menu'>
+            <li id='undo'>Undo<span class='shortcut'>CTRL+Z</span></li>
+            <li id='redo'>Redo<span class='shortcut'>CTRL+Y</span></li>
+          </ul>
+        </li>
+        <li>Camera
+          <ul class='sub-menu options'>
+            <li id='resetcamera'>Reset</li>
+            <li class='group-title'>Trackball mode</li>
+            <li class='togglable checked' data-radio='camera-mode' data-value='1'>Plane</li>
+            <li class='togglable' data-radio='camera-mode' data-value='0'>Spherical</li>
+            <li class='group-title'>Projection</li>
+            <li id='perspective' class='togglable checked' data-radio='camera-type' data-value='0'>Perspective</li>
+            <li id='orthographic' class='togglable' data-radio='camera-type' data-value='1'>Orthographic</li>
+            <li class='group-title'>Pivot</li>
+            <li class='togglable' data-value='pivot'>Picking pivot</li>
           </ul>
         </li>
         <li>Options
-          <ul class="sub-menu options">
-            <li class="group-title">Camera</li>
-            <li class="togglable checked" data-radio="camera-mode" data-value="1">Plane</li>
-            <li class="togglable" data-radio="camera-mode" data-value="0">Spherical</li>
-            <li class="group-title">Wacom Tablet</li>
-            <li class="togglable checked" data-value="radius">Pressure radius</li>
-            <li class="togglable" data-value="intensity">Pressure intensity</li>
+          <ul class='sub-menu options'>
+            <li class='group-title'>Wacom Tablet</li>
+            <li class='togglable checked' data-value='radius'>Pressure radius</li>
+            <li class='togglable' data-value='intensity'>Pressure intensity</li>
           </ul>
         </li>
-        <li id="about">About</li>
+        <li>Background
+          <ul class='sub-menu'>
+            <li id='resetbg'>Reset</li>
+            <li id='importbg'>Import (.jpg, .png)</li>
+          </ul>
+        </li>
+        <li id='about'>About</li>
       </ul>
     </div>
-    <div class="main-actions">
-      <div id="reset" class="reset"><i class="icon-refresh"></i>Reset sphere</div>
-      <div id="export" class="export-button"><i class="icon-cloud-upload"></i>Publish to Sketchfab</div>
+    <div class='main-actions'>
+      <div id='reset' class='reset'><i class='icon-refresh'></i>Reset sphere</div>
+      <div id='export' class='export-button'><i class='icon-cloud-upload'></i>Publish to Sketchfab</div>
     </div>
   </div>
-  <div id="gui-container"></div>
-  <div id="about-popup" class="modal">
+  <div id='gui-container'></div>
+  <div id='about-popup' class='modal'>
     <h1>About Sculptfab</h1>
       <p>
         SculptGL + Sketchfab<br/>
       </p>
       <p>
-        Sculptfab is a very simple tool letting you sculpt 3D models in the browser, and publish them in 1 click to <a href="sketchfab.com">sketchfab.com</a>
+        Sculptfab is a very simple tool letting you sculpt 3D models in the browser, and publish them in 1 click to <a href='http://sketchfab.com'>sketchfab.com</a>
 
-        <a href="mailto:contact@sculptfab.com">contact@sculptfab.com</a>
+        <a href='mailto:contact@sculptfab.com'>contact@sculptfab.com</a>
       </p>
-      <p>Based on <a href="http://stephaneginier.com/sculptgl/" target="_blank">SculptGL</a> by Stéphane Ginier.</p>
-      <span class="cancel"><i class="icon-remove"></i></span>
+      <p>Based on <a href='http://stephaneginier.com/sculptgl/' target='_blank'>SculptGL</a> by Stéphane Ginier.</p>
+      <span class='cancel'><i class='icon-remove'></i></span>
   </div>
 
   <!-- wacom tablet plugin -->
-  <object id="tablet-plugin" type="application/x-wacomtabletplugin"></object>
+  <object id='tablet-plugin' type='application/x-wacomtabletplugin'></object>
 
   <!-- 3rd party libraries -->
   <script src='lib/dat.gui.js' > </script>
@@ -107,6 +126,7 @@ Stéphane GINIER
   <script src='lib/jszip-deflate.js' > </script>
   <script src='lib/underscore.js' > </script>
   <script src='lib/sketchfab-upload.js' > </script>
+  <script src='lib/poly2tri.min.js'></script>
 
   <!-- 3D and math stuffs -->
   <script src='math3d/camera.js'></script>
@@ -121,7 +141,9 @@ Stéphane GINIER
   <script src='object/vertex.js'></script>
   <script src='object/octree.js'></script>
   <script src='object/render.js'></script>
+  <script src='object/shader.js'></script>
   <script src='object/states.js'></script>
+  <script src='object/background.js'></script>
 
   <!-- sculpting and topology stuffs -->
   <script src='editor/sculpt.js'></script>
@@ -129,10 +151,15 @@ Stéphane GINIER
   <script src='editor/subdivision.js'></script>
   <script src='editor/decimation.js'></script>
   <script src='editor/adaptive.js'></script>
+  <script src='editor/cut.js'></script>
 
   <!-- misc -->
-  <script src='misc/files.js'></script>
+  <script src='misc/import.js'></script>
+  <script src='misc/export.js'></script>
   <script src='misc/utils.js'></script>
+
+  <!-- misc -->
+  <script src='gui/gui.js'></script>
 
   <!-- main -->
   <script src='sculptgl.js'></script>

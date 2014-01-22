@@ -6,6 +6,7 @@ function State()
   this.nbVerticesState_ = 0; //number of vertices
   this.vArState_ = []; //copies of vertices coordinates
   this.nArState_ = []; //copies of normal coordinates
+  this.cArState_ = []; //copies of color vertices
   this.iArState_ = []; //copies of indices
   this.vState_ = []; //copies of vertex topology
   this.tState_ = []; //copies of triangle topology
@@ -58,8 +59,10 @@ States.prototype = {
   /** Push verts and tris */
   pushState: function (iTris, iVerts)
   {
-    this.pushStateTriangles(iTris);
-    this.pushStateVertices(iVerts);
+    if (iTris && iTris.length > 0)
+      this.pushStateTriangles(iTris);
+    if (iVerts && iVerts.length > 0)
+      this.pushStateVertices(iVerts);
   },
 
   /** Push triangles */
@@ -75,30 +78,17 @@ States.prototype = {
 
     var meshStateMask = Mesh.stateMask_;
     var nbTris = iTris.length;
-    var i = 0;
-    var oldNbState = tState.length;
-    for (i = 0; i < nbTris; ++i)
+    for (var i = 0; i < nbTris; ++i)
     {
-      var t = triangles[iTris[i]];
+      var id = iTris[i];
+      var t = triangles[id];
       if (t.stateFlag_ !== meshStateMask)
       {
         t.stateFlag_ = meshStateMask;
         tState.push(t.clone());
+        id *= 3;
+        iArState.push(iAr[id], iAr[id + 1], iAr[id + 2]);
       }
-    }
-
-    //fill states arrays
-    var nbState = tState.length;
-    iArState.length = nbState * 3;
-    var j = 0,
-      id = 0;
-    for (i = oldNbState; i < nbState; ++i)
-    {
-      id = tState[i].id_ * 3;
-      j = i * 3;
-      iArState[j] = iAr[id];
-      iArState[j + 1] = iAr[id + 1];
-      iArState[j + 2] = iAr[id + 2];
     }
   },
 
@@ -108,43 +98,30 @@ States.prototype = {
     var undoCur = this.undos_[this.curUndoIndex_];
     var vArState = undoCur.vArState_;
     var nArState = undoCur.nArState_;
+    var cArState = undoCur.cArState_;
     var vState = undoCur.vState_;
 
     var mesh = this.mesh_;
     var vAr = mesh.vertexArray_;
     var nAr = mesh.normalArray_;
+    var cAr = mesh.colorArray_;
     var vertices = mesh.vertices_;
 
     var meshStateMask = Mesh.stateMask_;
     var nbVerts = iVerts.length;
-    var i = 0;
-    var oldNbState = vState.length;
-    for (i = 0; i < nbVerts; ++i)
+    for (var i = 0; i < nbVerts; ++i)
     {
-      var v = vertices[iVerts[i]];
+      var id = iVerts[i];
+      var v = vertices[id];
       if (v.stateFlag_ !== meshStateMask)
       {
         v.stateFlag_ = meshStateMask;
         vState.push(v.clone());
+        id *= 3;
+        vArState.push(vAr[id], vAr[id + 1], vAr[id + 2]);
+        nArState.push(nAr[id], nAr[id + 1], nAr[id + 2]);
+        cArState.push(cAr[id], cAr[id + 1], cAr[id + 2]);
       }
-    }
-
-    //fill states arrays
-    var nbState = vState.length;
-    vArState.length = nbState * 3;
-    nArState.length = nbState * 3;
-    var j = 0,
-      id = 0;
-    for (i = oldNbState; i < nbState; ++i)
-    {
-      id = vState[i].id_ * 3;
-      j = i * 3;
-      vArState[j] = vAr[id];
-      vArState[j + 1] = vAr[id + 1];
-      vArState[j + 2] = vAr[id + 2];
-      nArState[j] = nAr[id];
-      nArState[j + 1] = nAr[id + 1];
-      nArState[j + 2] = nAr[id + 2];
     }
   },
 
@@ -165,7 +142,7 @@ States.prototype = {
     this.pullUndoTriangles();
     this.pullUndoVertices();
 
-    this.recomputeOctree(this.undos_[this.curUndoIndex_].aabbState_);
+    this.mesh_.computeOctree(this.undos_[this.curUndoIndex_].aabbState_);
     mesh.updateBuffers();
 
     this.redos_.push(redoState);
@@ -239,6 +216,7 @@ States.prototype = {
     var mesh = this.mesh_;
     var vAr = mesh.vertexArray_;
     var nAr = mesh.normalArray_;
+    var cAr = mesh.colorArray_;
     var vertices = mesh.vertices_;
 
     var nbVertices = vertices.length;
@@ -250,6 +228,7 @@ States.prototype = {
 
     var vArRedoState = redoState.vArState_;
     var nArRedoState = redoState.nArState_;
+    var cArRedoState = redoState.cArState_;
     var vRedoState = redoState.vState_;
 
     var i = 0,
@@ -281,6 +260,7 @@ States.prototype = {
     var nbState = vRedoState.length;
     vArRedoState.length = nbState * 3;
     nArRedoState.length = nbState * 3;
+    cArRedoState.length = nbState * 3;
     var j = 0;
     for (i = 0; i < nbState; ++i)
     {
@@ -292,6 +272,9 @@ States.prototype = {
       nArRedoState[j] = nAr[id];
       nArRedoState[j + 1] = nAr[id + 1];
       nArRedoState[j + 2] = nAr[id + 2];
+      cArRedoState[j] = cAr[id];
+      cArRedoState[j + 1] = cAr[id + 1];
+      cArRedoState[j + 2] = cAr[id + 2];
     }
   },
 
@@ -334,11 +317,13 @@ States.prototype = {
     var mesh = this.mesh_;
     var vAr = mesh.vertexArray_;
     var nAr = mesh.normalArray_;
+    var cAr = mesh.colorArray_;
     var vertices = mesh.vertices_;
 
     var vUndoState = undoCur.vState_;
     var vArUndoState = undoCur.vArState_;
     var nArUndoState = undoCur.nArState_;
+    var cArUndoState = undoCur.cArState_;
     var nbVerticesState = undoCur.nbVerticesState_;
 
     var nbVerts = vUndoState.length;
@@ -360,6 +345,9 @@ States.prototype = {
         nAr[id] = nArUndoState[j];
         nAr[id + 1] = nArUndoState[j + 1];
         nAr[id + 2] = nArUndoState[j + 2];
+        cAr[id] = cArUndoState[j];
+        cAr[id + 1] = cArUndoState[j + 1];
+        cAr[id + 2] = cArUndoState[j + 2];
       }
     }
   },
@@ -378,7 +366,7 @@ States.prototype = {
     this.pullRedoTriangles();
     this.pullRedoVertices();
 
-    this.recomputeOctree(redoCur.aabbState_.clone());
+    this.mesh_.computeOctree(redoCur.aabbState_);
     mesh.updateBuffers();
 
     if (!this.firstState_) this.curUndoIndex_++;
@@ -423,12 +411,14 @@ States.prototype = {
 
     var vArRedoState = redoCur.vArState_;
     var nArRedoState = redoCur.nArState_;
+    var cArRedoState = redoCur.cArState_;
     var vRedoState = redoCur.vState_;
     var nbVerts = vRedoState.length;
 
     var mesh = this.mesh_;
     var vAr = mesh.vertexArray_;
     var nAr = mesh.normalArray_;
+    var cAr = mesh.colorArray_;
     var vertices = mesh.vertices_;
 
     var i = 0,
@@ -447,22 +437,10 @@ States.prototype = {
       nAr[id] = nArRedoState[j];
       nAr[id + 1] = nArRedoState[j + 1];
       nAr[id + 2] = nArRedoState[j + 2];
+      cAr[id] = cArRedoState[j];
+      cAr[id + 1] = cArRedoState[j + 1];
+      cAr[id + 2] = cArRedoState[j + 2];
     }
-  },
-
-  /** Recompute octree */
-  recomputeOctree: function (aabbSplit)
-  {
-    var mesh = this.mesh_;
-    var triangles = mesh.triangles_;
-    var nbTriangles = triangles.length;
-
-    var trianglesAll = new Array(nbTriangles);
-    for (var i = 0; i < nbTriangles; ++i)
-      trianglesAll[i] = i;
-    ++Triangle.tagMask_;
-    mesh.octree_ = new Octree();
-    mesh.octree_.build(mesh, trianglesAll, aabbSplit);
   },
 
   /** Reset */

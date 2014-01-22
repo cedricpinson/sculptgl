@@ -74,7 +74,7 @@
     }
 
     select {
-      background: $select url('/ressources/select-icon.png') no-repeat 120px center;
+      background: $select url('../ressources/select-icon.png') no-repeat 120px center;
       @include prefix(appearance, none);
       color: $light;
       border: 0;
