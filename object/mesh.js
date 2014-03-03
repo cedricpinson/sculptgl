@@ -299,7 +299,7 @@ Mesh.prototype = {
   /** Update the rendering buffers */
   doUpdateBuffers: function ()
   {
-    // if (this.queued_ === true)
+    if (this.queued_ === true)
       this.render_.updateBuffers();
     this.queued_ = false;
   },
