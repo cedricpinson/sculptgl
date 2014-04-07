@@ -22,7 +22,7 @@ Export.exportOBJ = function (mesh, mtl_name)
   {
     j = i * 3;
     if(mtl_name)
-      data += 'v ' + vAr[j] * scale + ' ' + vAr[j + 1] * scale + ' ' + vAr[j + 2] * scale + cAr[j] + ' ' + cAr[j + 1 ] + ' ' + cAr[j + 2] + '\n';
+      data += 'v ' + vAr[j] * scale + ' ' + vAr[j + 1] * scale + ' ' + vAr[j + 2] * scale + ' ' + cAr[j] + ' ' + cAr[j + 1 ] + ' ' + cAr[j + 2] + '\n';
     else
       data += 'v ' + vAr[j] * scale + ' ' + vAr[j + 1] * scale + ' ' + vAr[j + 2] * scale + '\n';
   }
